@@ -159,21 +159,11 @@ const RadarManager = (function () {
 
             removeOverlay(productId);
 
-            let tileErrorCount = 0;
             const layer = L.tileLayer(tileUrl, {
                 opacity: frame.opacity || 0.65,
                 zIndex: 15,
                 maxZoom: frame.max_zoom || 10,
                 errorTileUrl: "",  // suppress broken tile images
-            });
-
-            layer.on("tileerror", () => {
-                tileErrorCount++;
-                // If many tiles fail, the tile server is returning errors
-                if (tileErrorCount >= 5) {
-                    console.error(`SRV tile errors (${tileErrorCount}) — disabling overlay`);
-                    disableOverlay(productId, `SRV tiles failing for ${radarSite.site_id}`);
-                }
             });
 
             layer.addTo(map);

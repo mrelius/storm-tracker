@@ -99,7 +99,7 @@ async def root(request: Request):
 
 @app.get("/proxy/rainviewer/{path:path}")
 async def proxy_rainviewer_tiles(path: str):
-    """Reverse proxy RainViewer tiles."""
+    """Reverse proxy RainViewer tiles. Returns transparent PNG for missing tiles."""
     import httpx as _httpx
     from fastapi.responses import Response as _Resp
     try:
@@ -111,14 +111,14 @@ async def proxy_rainviewer_tiles(path: str):
                     media_type="image/png",
                     headers={"Cache-Control": "public, max-age=300"},
                 )
-            return _Resp(content=b"", status_code=resp.status_code)
+            return _Resp(content=_EMPTY_TILE, media_type="image/png")
     except Exception:
-        return _Resp(content=b"", status_code=502)
+        return _Resp(content=_EMPTY_TILE, media_type="image/png")
 
 
 @app.get("/proxy/iem/{path:path}")
 async def proxy_iem_tiles(path: str):
-    """Reverse proxy IEM SRV tiles so browser doesn't need cross-origin access."""
+    """Reverse proxy IEM SRV tiles. Returns transparent PNG for missing tiles."""
     import httpx as _httpx
     from fastapi.responses import Response as _Resp
     try:
@@ -130,14 +130,21 @@ async def proxy_iem_tiles(path: str):
                     media_type="image/png",
                     headers={"Cache-Control": "public, max-age=120"},
                 )
-            return _Resp(content=b"", status_code=resp.status_code)
+            return _Resp(content=_EMPTY_TILE, media_type="image/png")
     except Exception:
-        return _Resp(content=b"", status_code=502)
+        return _Resp(content=_EMPTY_TILE, media_type="image/png")
+
+
+# 1x1 transparent PNG (67 bytes) — returned for missing tiles instead of 404
+_EMPTY_TILE = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+               b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+               b"\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01"
+               b"\r\n\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
 
 
 @app.get("/proxy/cc/{path:path}")
 async def proxy_cc_tiles(path: str):
-    """Reverse proxy CC tiles from LXC 121 so browser doesn't need direct access."""
+    """Reverse proxy CC tiles from LXC 121. Returns transparent PNG for missing tiles."""
     import httpx as _httpx
     from fastapi.responses import Response as _Resp
     try:
@@ -146,12 +153,14 @@ async def proxy_cc_tiles(path: str):
             if resp.status_code == 200:
                 return _Resp(
                     content=resp.content,
-                    media_type=resp.headers.get("content-type", "image/png"),
+                    media_type="image/png",
                     headers={"Cache-Control": "public, max-age=60"},
                 )
-            return _Resp(content=b"", status_code=resp.status_code)
+            # Return transparent PNG instead of 404 (edge-of-coverage is normal)
+            return _Resp(content=_EMPTY_TILE, media_type="image/png",
+                         headers={"Cache-Control": "public, max-age=300"})
     except Exception:
-        return _Resp(content=b"", status_code=502)
+        return _Resp(content=_EMPTY_TILE, media_type="image/png")
 
 
 @app.get("/proxy/cc-sample")
