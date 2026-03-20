@@ -46,7 +46,9 @@
             <button id="btn-cc-toggle" class="radar-btn" title="CC — requires SRV active (site radar, aligned with SRV)">
                 CC
             </button>
-            <span id="radar-site-label" class="radar-info hidden"></span>
+            <select id="radar-site-selector" class="radar-site-selector" title="Select radar site">
+                <option value="auto">Auto (nearest)</option>
+            </select>
             <span id="radar-loading" class="radar-loading hidden">Loading radar...</span>
             <div id="animation-controls" class="hidden">
                 <button id="btn-anim-play" class="radar-btn" title="Play/Pause">&#9654;</button>
@@ -112,6 +114,21 @@
             <div class="srv-legend-labels">
                 <span>toward</span>
                 <span>away</span>
+            </div>
+        </div>
+
+        <!-- CC Legend -->
+        <div id="cc-legend" class="cc-legend hidden">
+            <div class="cc-legend-title">Correlation Coeff.</div>
+            <div class="cc-legend-bar">
+                <span class="cc-label-left">0.2</span>
+                <div class="cc-gradient"></div>
+                <span class="cc-label-right">1.0</span>
+            </div>
+            <div class="cc-legend-bands">
+                <div class="cc-band"><span class="cc-swatch cc-low"></span> &lt;0.80 debris/non-met</div>
+                <div class="cc-band"><span class="cc-swatch cc-mid"></span> 0.80–0.90 hail/mixed</div>
+                <div class="cc-band"><span class="cc-swatch cc-high"></span> &gt;0.95 rain</div>
             </div>
         </div>
 

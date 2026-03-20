@@ -27,6 +27,8 @@ const RadarManager = (function () {
     let refreshTimer = null;
     const REFRESH_INTERVAL = 300000; // 5 minutes
 
+    let manualSiteOverride = null;  // null = auto/nearest
+
     function init(leafletMap) {
         map = leafletMap;
 
@@ -36,9 +38,12 @@ const RadarManager = (function () {
         document.getElementById("btn-anim-play").addEventListener("click", toggleAnimation);
         document.getElementById("anim-speed").addEventListener("input", onSpeedChange);
         document.getElementById("anim-scrubber").addEventListener("input", onScrub);
+        document.getElementById("radar-site-selector").addEventListener("change", onSiteSelected);
 
         StormState.on("layerChanged", onLayerChanged);
         StormState.on("locationChanged", onLocationChanged);
+
+        populateSiteSelector();
     }
 
     // --- Layer activation ---
@@ -114,6 +119,7 @@ const RadarManager = (function () {
             }
             btn.classList.add("active");
             await loadOverlay("cc");
+            showCCLegend(true);
             updateSourceLabels();
         }
     }
@@ -123,6 +129,7 @@ const RadarManager = (function () {
         StormState.deactivateLayer("cc");
         btn.classList.remove("active");
         removeOverlay("cc");
+        showCCLegend(false);
         updateSourceLabels();
     }
 
@@ -210,7 +217,68 @@ const RadarManager = (function () {
 
     // --- Radar site management ---
 
+    // --- Site selection ---
+
+    async function populateSiteSelector() {
+        const loc = StormState.state.location;
+        const params = loc.lat && loc.lon ? `?lat=${loc.lat}&lon=${loc.lon}` : "";
+        try {
+            const resp = await fetch(`/api/radar/nexrad/all${params}`);
+            const data = await resp.json();
+            const select = document.getElementById("radar-site-selector");
+            // Keep the "Auto" option, add all sites
+            data.sites.forEach(s => {
+                const opt = document.createElement("option");
+                opt.value = s.site_id;
+                const dist = s.distance_km ? ` (${Math.round(s.distance_km)}km)` : "";
+                opt.textContent = `${s.site_id} — ${s.name}${dist}`;
+                select.appendChild(opt);
+            });
+        } catch (e) {
+            console.warn("Failed to load radar sites:", e);
+        }
+    }
+
+    async function onSiteSelected() {
+        const select = document.getElementById("radar-site-selector");
+        const val = select.value;
+
+        if (val === "auto") {
+            manualSiteOverride = null;
+            await selectNearestRadar();
+        } else {
+            manualSiteOverride = val;
+            await switchToSite(val);
+        }
+    }
+
+    async function switchToSite(siteId) {
+        try {
+            const resp = await fetch(`/api/radar/nexrad/select?site_id=${siteId}`, { method: "POST" });
+            const data = await resp.json();
+            radarSite = data.site;
+            radarSite.distance_km = null; // manual selection, distance not relevant
+            updateSourceLabels();
+
+            // Reload active overlays for new site
+            const layers = StormState.state.radar.activeLayers;
+            if (layers.includes("srv")) {
+                await loadOverlay("srv");
+            }
+            if (layers.includes("cc")) {
+                await loadOverlay("cc");
+            }
+            if (layers.includes("srv") || layers.includes("cc")) {
+                showRangeCircle();
+            }
+        } catch (e) {
+            console.error("Failed to switch site:", e);
+        }
+    }
+
     async function selectNearestRadar() {
+        if (manualSiteOverride) return;  // don't auto-switch if user chose manually
+
         const loc = StormState.state.location;
         if (!loc.lat || !loc.lon) return;
 
@@ -220,20 +288,14 @@ const RadarManager = (function () {
             const sites = data.sites || [];
             if (sites.length > 0) {
                 radarSite = sites[0];
-                // Tell backend to switch IEM provider
                 await fetch(`/api/radar/nexrad/select?site_id=${radarSite.site_id}`, { method: "POST" });
-                updateSiteLabel();
+                // Update selector to reflect auto choice
+                const select = document.getElementById("radar-site-selector");
+                if (select) select.value = "auto";
+                updateSourceLabels();
             }
         } catch (e) {
             console.error("Failed to select radar site:", e);
-        }
-    }
-
-    function updateSiteLabel() {
-        const el = document.getElementById("radar-site-label");
-        if (el && radarSite) {
-            el.textContent = `NEXRAD: ${radarSite.site_id}`;
-            el.classList.remove("hidden");
         }
     }
 
@@ -241,9 +303,13 @@ const RadarManager = (function () {
         const hadSite = radarSite;
         await selectNearestRadar();
         if (hadSite && radarSite && hadSite.site_id !== radarSite.site_id) {
-            if (StormState.state.radar.activeLayers.includes("srv")) {
+            const layers = StormState.state.radar.activeLayers;
+            if (layers.includes("srv")) {
                 await loadOverlay("srv");
-                showRangeCircle();  // update circle to new site
+                showRangeCircle();
+            }
+            if (layers.includes("cc")) {
+                await loadOverlay("cc");
             }
         }
     }
@@ -265,6 +331,9 @@ const RadarManager = (function () {
         if (!radarState.activeLayers.includes("srv")) {
             showSRVLegend(false);
             removeRangeCircle();
+        }
+        if (!radarState.activeLayers.includes("cc")) {
+            showCCLegend(false);
         }
     }
 
@@ -601,6 +670,11 @@ const RadarManager = (function () {
 
     function showSRVLegend(show) {
         const el = document.getElementById("srv-legend");
+        if (el) el.classList.toggle("hidden", !show);
+    }
+
+    function showCCLegend(show) {
+        const el = document.getElementById("cc-legend");
         if (el) el.classList.toggle("hidden", !show);
     }
 

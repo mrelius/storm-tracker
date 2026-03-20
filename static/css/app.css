@@ -177,13 +177,26 @@ html, body {
     color: #ef4444;
 }
 
-#radar-site-label {
-    font-size: 10px;
-    color: var(--text-muted);
+/* Radar Site Selector */
+.radar-site-selector {
+    background: rgba(10, 14, 23, 0.9);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    padding: 4px 6px;
+    border-radius: 4px;
+    font-size: 11px;
     font-family: monospace;
-    padding: 2px 6px;
-    background: rgba(10, 14, 23, 0.7);
-    border-radius: 3px;
+    max-width: 160px;
+    cursor: pointer;
+}
+
+.radar-site-selector:hover {
+    border-color: var(--accent);
+}
+
+.radar-site-selector:focus {
+    outline: none;
+    border-color: var(--accent);
 }
 
 .radar-icon {
@@ -670,6 +683,76 @@ html, body {
     margin-top: 1px;
 }
 
+/* CC Legend */
+.cc-legend {
+    position: absolute;
+    bottom: 80px;
+    right: 400px;
+    z-index: 1000;
+    background: rgba(10, 14, 23, 0.9);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    width: 150px;
+}
+
+.cc-legend-title {
+    font-size: 9px;
+    color: var(--text-muted);
+    text-align: center;
+    margin-bottom: 2px;
+    letter-spacing: 0.5px;
+}
+
+.cc-legend-bar {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.cc-label-left, .cc-label-right {
+    font-size: 8px;
+    color: var(--text-muted);
+    font-family: monospace;
+    min-width: 16px;
+    text-align: center;
+}
+
+.cc-gradient {
+    flex: 1;
+    height: 10px;
+    border-radius: 2px;
+    background: linear-gradient(to right,
+        #8b0000, #ff0000, #ff8c00, #ffd700,
+        #add8e6, #6495ed, #1e90ff, #0000ff, #00008b
+    );
+}
+
+.cc-legend-bands {
+    margin-top: 4px;
+}
+
+.cc-band {
+    font-size: 8px;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    line-height: 1.5;
+}
+
+.cc-swatch {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+
+.cc-low { background: #ff0000; }
+.cc-mid { background: #ffd700; }
+.cc-high { background: #1e90ff; }
+
 /* Radar Error/Retry */
 .radar-error {
     position: absolute;
@@ -877,6 +960,10 @@ html, body {
     }
 
     .srv-legend {
+        right: 16px;
+    }
+
+    .cc-legend {
         right: 16px;
     }
 }

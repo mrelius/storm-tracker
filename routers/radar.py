@@ -98,6 +98,18 @@ async def nearest_radar(
     return {"sites": sites}
 
 
+@router.get("/nexrad/all")
+async def list_all_radars(
+    lat: float | None = Query(None),
+    lon: float | None = Query(None),
+):
+    """List all NEXRAD sites, optionally sorted by distance from a point."""
+    if lat is not None and lon is not None:
+        return {"sites": find_nearest(lat, lon, count=len(NEXRAD_SITES))}
+    return {"sites": [{"site_id": s[0], "name": s[1], "lat": s[2], "lon": s[3]}
+                       for s in NEXRAD_SITES]}
+
+
 @router.post("/nexrad/select")
 async def select_radar_site(site_id: str = Query(...)):
     """Switch the IEM provider to a different radar site.
