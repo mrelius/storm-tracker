@@ -32,6 +32,7 @@ const RadarManager = (function () {
 
         document.getElementById("btn-radar-toggle").addEventListener("click", toggleReflectivity);
         document.getElementById("btn-srv-toggle").addEventListener("click", toggleSRV);
+        document.getElementById("btn-cc-toggle").addEventListener("click", toggleCC);
         document.getElementById("btn-anim-play").addEventListener("click", toggleAnimation);
         document.getElementById("anim-speed").addEventListener("input", onSpeedChange);
         document.getElementById("anim-scrubber").addEventListener("input", onScrub);
@@ -62,6 +63,10 @@ const RadarManager = (function () {
     async function toggleSRV() {
         const btn = document.getElementById("btn-srv-toggle");
         if (StormState.state.radar.activeLayers.includes("srv")) {
+            // Deactivate CC first (CC requires SRV)
+            if (StormState.state.radar.activeLayers.includes("cc")) {
+                deactivateCC();
+            }
             StormState.deactivateLayer("srv");
             btn.classList.remove("active");
             removeOverlay("srv");
@@ -89,18 +94,53 @@ const RadarManager = (function () {
         }
     }
 
+    // --- CC overlay (requires SRV active) ---
+
+    async function toggleCC() {
+        const btn = document.getElementById("btn-cc-toggle");
+        if (StormState.state.radar.activeLayers.includes("cc")) {
+            deactivateCC();
+        } else {
+            // CC requires SRV to be active
+            if (!StormState.state.radar.activeLayers.includes("srv")) {
+                showRadarError(true, "CC requires SRV to be active first");
+                setTimeout(() => showRadarError(false), 3000);
+                return;
+            }
+            const result = StormState.activateLayer("cc");
+            if (!result.ok) {
+                console.warn("Cannot activate CC:", result.reason);
+                return;
+            }
+            btn.classList.add("active");
+            await loadOverlay("cc");
+            updateSourceLabels();
+        }
+    }
+
+    function deactivateCC() {
+        const btn = document.getElementById("btn-cc-toggle");
+        StormState.deactivateLayer("cc");
+        btn.classList.remove("active");
+        removeOverlay("cc");
+        updateSourceLabels();
+    }
+
     async function loadOverlay(productId) {
         // Ensure we have a radar site selected
         if (!radarSite) {
             await selectNearestRadar();
         }
         if (!radarSite) {
-            showOverlayError(productId, "No radar site available");
+            disableOverlay(productId, "No radar site available");
             return;
         }
 
+        // Select provider based on product
+        const providerId = productId === "cc" ? "nexrad_cc" : "iem";
+
         try {
-            const resp = await fetch(`/api/radar/frames/${productId}?provider_id=iem`);
+            const resp = await fetch(`/api/radar/frames/${productId}?provider_id=${providerId}`);
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const data = await resp.json();
             const frames = data.frames || [];
@@ -557,7 +597,10 @@ const RadarManager = (function () {
             parts.push("REF: composite");
         }
         if (StormState.state.radar.activeLayers.includes("srv") && radarSite) {
-            parts.push(`SRV: ${radarSite.site_id} (single radar)`);
+            parts.push(`SRV: ${radarSite.site_id}`);
+        }
+        if (StormState.state.radar.activeLayers.includes("cc") && radarSite) {
+            parts.push(`CC: ${radarSite.site_id} (site radar)`);
         }
 
         if (parts.length > 0) {

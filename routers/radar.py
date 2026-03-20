@@ -5,6 +5,7 @@ from config import LAYER_RULES, ADVANCED_ONLY_COMBOS, MAX_ACTIVE_LAYERS
 from services.radar import registry
 from services.radar.nexrad_sites import find_nearest, get_site, NEXRAD_SITES
 from services.radar.iem import IEMRadarProvider
+from services.radar.nexrad_cc import NexradCCProvider
 import cache
 
 logger = logging.getLogger(__name__)
@@ -108,16 +109,26 @@ async def select_radar_site(site_id: str = Query(...)):
         raise HTTPException(status_code=404, detail=f"Unknown radar site: {site_id}")
 
     # Update IEM provider's active site
-    provider = registry.get_provider("iem")
-    if provider and isinstance(provider, IEMRadarProvider):
-        provider.set_site(site_id)
-        cache.delete("radar:products")  # invalidate — availability may change
+    iem = registry.get_provider("iem")
+    if iem and isinstance(iem, IEMRadarProvider):
+        iem.set_site(site_id)
 
-    # Return availability for all IEM products on this site
+    # Sync CC pipeline to same site
+    cc = registry.get_provider("nexrad_cc")
+    if cc and isinstance(cc, NexradCCProvider):
+        await cc.set_site(site_id)
+
+    cache.delete("radar:products")
+
+    # Return availability for all products on this site
     availability = {}
-    if provider:
-        for pid in provider.supported_products():
-            frame = await provider.get_latest_frame(pid)
+    if iem:
+        for pid in iem.supported_products():
+            frame = await iem.get_latest_frame(pid)
+            availability[pid] = frame.available if frame else False
+    if cc:
+        for pid in cc.supported_products():
+            frame = await cc.get_latest_frame(pid)
             availability[pid] = frame.available if frame else False
 
     return {"site": site, "availability": availability}

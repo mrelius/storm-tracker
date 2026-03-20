@@ -18,7 +18,7 @@ from services.nws_ingest import run_ingest_loop, stop_ingest
 from services.radar.registry import register
 from services.radar.rainviewer import RainViewerProvider
 from services.radar.iem import IEMRadarProvider
-from services.radar.mrms import MRMSRadarProvider
+from services.radar.nexrad_cc import NexradCCProvider
 from routers import alerts, radar, location, health
 
 settings = get_settings()
@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI):
     # Register radar providers
     register(RainViewerProvider())
     register(IEMRadarProvider(site_id="ILN"))  # default: Wilmington OH (Ohio Valley)
-    register(MRMSRadarProvider())
+    register(NexradCCProvider())
 
     # Start background ingest
     _ingest_task = asyncio.create_task(run_ingest_loop())
