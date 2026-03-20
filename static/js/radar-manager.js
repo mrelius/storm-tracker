@@ -320,7 +320,10 @@ const RadarManager = (function () {
     }
 
     function preloadFrames() {
-        clearPreloaded();
+        // Clear old tile layers but preserve frameMeta (set by loadAndPreload)
+        frameLayers.forEach(layer => { if (layer) map.removeLayer(layer); });
+        frameLayers = [];
+        currentFrameIdx = -1;
         totalExpected = frameMeta.length;
         loadedCount = 0;
 
