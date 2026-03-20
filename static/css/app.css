@@ -723,7 +723,7 @@ html, body {
     height: 10px;
     border-radius: 2px;
     background: linear-gradient(to right,
-        #6600aa, #9900cc, #cc33ff,
+        #dc1414, #f03220, #f55028,
         #d28c50, #deb887,
         #b4d2e6, #6495ed, #1e90ff, #005adc
     );
@@ -750,7 +750,7 @@ html, body {
     flex-shrink: 0;
 }
 
-.cc-low { background: #9900cc; }
+.cc-low { background: #dc1414; }
 .cc-mid { background: #d28c50; }
 .cc-high { background: #1e90ff; }
 
