@@ -1,0 +1,16 @@
+[Unit]
+Description=Storm Tracker CC Tile Pipeline (MRMS MergedRhoHV)
+After=network.target storm-tracker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/storm-tracker
+ExecStart=/usr/bin/python3 /opt/storm-tracker/services/cc_pipeline.py --daemon
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

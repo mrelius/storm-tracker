@@ -2,6 +2,7 @@ import asyncio
 import time
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -17,6 +18,7 @@ from services.nws_ingest import run_ingest_loop, stop_ingest
 from services.radar.registry import register
 from services.radar.rainviewer import RainViewerProvider
 from services.radar.iem import IEMRadarProvider
+from services.radar.mrms import MRMSRadarProvider
 from routers import alerts, radar, location, health
 
 settings = get_settings()
@@ -33,10 +35,12 @@ async def lifespan(app: FastAPI):
     await init_db()
     await seed_counties()
     cache.init_cache()
+    Path("data/cc_tiles").mkdir(parents=True, exist_ok=True)
 
     # Register radar providers
     register(RainViewerProvider())
     register(IEMRadarProvider(site_id="ILN"))  # default: Wilmington OH (Ohio Valley)
+    register(MRMSRadarProvider())
 
     # Start background ingest
     _ingest_task = asyncio.create_task(run_ingest_loop())
@@ -83,6 +87,7 @@ app.include_router(radar.router)
 app.include_router(location.router)
 app.include_router(health.router)
 
+app.mount("/tiles/cc", StaticFiles(directory="data/cc_tiles"), name="cc_tiles")
 app.mount("/data", StaticFiles(directory="data"), name="data")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
