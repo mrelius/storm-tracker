@@ -10,7 +10,7 @@ const Validation = (function () {
     let inspectPanel = null;
     let throttleTimer = null;
     const THROTTLE_MS = 100;
-    const CC_SAMPLE_URL = "http://10.206.8.121:8121/api/radar/sample";
+    const CC_SAMPLE_URL = "/proxy/cc-sample";
 
     // NWS velocity color table (approximate reverse mapping: RGBA → knots)
     // Green = inbound (negative), Red = outbound (positive)
@@ -278,7 +278,7 @@ const Validation = (function () {
             return _ccTimestampCache;
         }
         try {
-            const resp = await fetch("http://10.206.8.121:8121/api/status");
+            const resp = await fetch("/proxy/cc-status");
             const data = await resp.json();
             if (data.timestamp) {
                 _ccTimestampCache = data.timestamp;

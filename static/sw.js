@@ -54,8 +54,9 @@ self.addEventListener("fetch", (event) => {
         return;
     }
 
-    // Everything else: network only
-    event.respondWith(fetch(event.request));
+    // Everything else (including cross-origin tile requests): pass through directly
+    // Do NOT wrap in event.respondWith — let the browser handle natively
+    return;
 });
 
 async function networkFirstThenCache(request) {

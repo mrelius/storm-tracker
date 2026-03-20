@@ -320,67 +320,35 @@ const RadarManager = (function () {
     }
 
     function preloadFrames() {
-        return new Promise((resolve) => {
-            clearPreloaded();
-            totalExpected = frameMeta.length;
-            loadedCount = 0;
+        clearPreloaded();
+        totalExpected = frameMeta.length;
+        loadedCount = 0;
 
-            frameMeta.forEach((frame, idx) => {
-                if (!frame.tile_url_template) {
-                    loadedCount++;
-                    frameLayers.push(null);
-                    return;
-                }
-
-                const layer = L.tileLayer(frame.tile_url_template, {
-                    opacity: 0,
-                    zIndex: 10,
-                    maxZoom: frame.max_zoom || 12,
-                });
-
-                layer.on("load", () => {
-                    loadedCount++;
-                    updateLoadProgress();
-                    if (loadedCount >= totalExpected) {
-                        onAllFramesLoaded();
-                        resolve();
-                    }
-                });
-
-                layer.on("tileerror", () => {
-                    loadedCount++;
-                    if (loadedCount >= totalExpected) {
-                        onAllFramesLoaded();
-                        resolve();
-                    }
-                });
-
-                layer.addTo(map);
-                frameLayers.push(layer);
-            });
-
-            // Fallback: if all frames had no URL
-            if (totalExpected === 0 || frameLayers.length === 0) {
-                resolve();
+        frameMeta.forEach((frame) => {
+            if (!frame.tile_url_template) {
+                frameLayers.push(null);
+                return;
             }
 
-            // Safety timeout — don't block forever
-            setTimeout(() => {
-                if (loadedCount < totalExpected) {
-                    console.warn(`Radar preload timeout: ${loadedCount}/${totalExpected} loaded`);
-                    onAllFramesLoaded();
-                    resolve();
-                }
-            }, 15000);
-        });
-    }
+            const layer = L.tileLayer(frame.tile_url_template, {
+                opacity: 0,
+                zIndex: 10,
+                maxZoom: frame.max_zoom || 12,
+            });
 
-    function onAllFramesLoaded() {
+            layer.addTo(map);
+            frameLayers.push(layer);
+        });
+
+        // Show latest frame immediately (tiles render as they load)
         showLoading(false);
-        // Show latest frame
         const lastIdx = frameLayers.length - 1;
-        showFrame(lastIdx);
+        if (lastIdx >= 0) {
+            showFrame(lastIdx);
+        }
         setupScrubber();
+
+        return Promise.resolve();
     }
 
     function clearPreloaded() {

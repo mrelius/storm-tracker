@@ -72,8 +72,8 @@ class NexradCCProvider(RadarProvider):
             except ValueError:
                 pass
 
-        # Build tile URL pointing to LXC 121
-        tile_url = f"{CC_RADAR_HOST}/tiles/{site_id}/latest/{{z}}/{{x}}/{{y}}.png"
+        # Build tile URL through LXC 119 proxy (browser can't reach LXC 121 directly)
+        tile_url = f"/proxy/cc/{site_id}/latest/{{z}}/{{x}}/{{y}}.png"
 
         return [RadarLayerInfo(
             product_id="cc",

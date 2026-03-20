@@ -87,7 +87,6 @@ app.include_router(radar.router)
 app.include_router(location.router)
 app.include_router(health.router)
 
-app.mount("/tiles/cc", StaticFiles(directory="data/cc_tiles"), name="cc_tiles")
 app.mount("/data", StaticFiles(directory="data"), name="data")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
@@ -96,3 +95,46 @@ templates = Jinja2Templates(directory="templates")
 @app.get("/")
 async def root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
+
+
+@app.get("/proxy/cc/{path:path}")
+async def proxy_cc_tiles(path: str):
+    """Reverse proxy CC tiles from LXC 121 so browser doesn't need direct access."""
+    import httpx as _httpx
+    from fastapi.responses import Response as _Resp
+    try:
+        async with _httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"http://10.206.8.121:8121/tiles/{path}")
+            if resp.status_code == 200:
+                return _Resp(
+                    content=resp.content,
+                    media_type=resp.headers.get("content-type", "image/png"),
+                    headers={"Cache-Control": "public, max-age=60"},
+                )
+            return _Resp(content=b"", status_code=resp.status_code)
+    except Exception:
+        return _Resp(content=b"", status_code=502)
+
+
+@app.get("/proxy/cc-sample")
+async def proxy_cc_sample(lat: float = 0, lon: float = 0):
+    """Proxy CC raw value sampling from LXC 121."""
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"http://10.206.8.121:8121/api/radar/sample?lat={lat}&lon={lon}")
+            return resp.json()
+    except Exception:
+        return {"cc_value": None, "error": "CC pipeline unreachable"}
+
+
+@app.get("/proxy/cc-status")
+async def proxy_cc_status():
+    """Proxy CC pipeline status from LXC 121."""
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get("http://10.206.8.121:8121/api/status")
+            return resp.json()
+    except Exception:
+        return {"status": "unreachable", "available": False}
