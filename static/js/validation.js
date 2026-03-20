@@ -49,6 +49,7 @@ const Validation = (function () {
         inspectPanel = document.getElementById("validation-panel");
 
         document.getElementById("btn-validation-toggle").addEventListener("click", toggle);
+        document.getElementById("btn-val-copy").addEventListener("click", copyToClipboard);
     }
 
     function toggle() {
@@ -137,7 +138,8 @@ const Validation = (function () {
                 if (resp.ok) {
                     const data = await resp.json();
                     if (data.cc_value !== null) {
-                        setField("val-cc", data.cc_value.toFixed(4));
+                        const clamped = Math.max(0, Math.min(1, data.cc_value));
+                        setField("val-cc", clamped.toFixed(4));
                     } else {
                         setField("val-cc", data.in_range ? "no return" : "out of range");
                     }
@@ -343,6 +345,50 @@ const Validation = (function () {
     function setField(id, text) {
         const el = document.getElementById(id);
         if (el) el.textContent = text;
+    }
+
+    function copyToClipboard() {
+        const getField = (id) => {
+            const el = document.getElementById(id);
+            return el ? el.textContent.trim() : "—";
+        };
+
+        const tsEl = document.getElementById("val-timestamps");
+        const timestamps = tsEl ? tsEl.textContent.replace(/\n/g, ", ").trim() : "—";
+
+        const text = [
+            `Storm Tracker Validation Export`,
+            `Date: ${new Date().toISOString()}`,
+            ``,
+            `Coordinates: ${getField("val-coords")}`,
+            `Radar Site: ${StormState.state.radar.activeLayers.length > 0 ? (document.getElementById("radar-site-label")?.textContent || "—") : "—"}`,
+            ``,
+            `REF (approx): ${getField("val-ref")}`,
+            `SRV (approx): ${getField("val-srv")}`,
+            `CC (exact):   ${getField("val-cc")}`,
+            ``,
+            `Timestamps: ${timestamps}`,
+            `Alignment: ${getField("val-alignment")}`,
+            `Layer Health: ${getField("val-health").replace(/\n/g, ", ")}`,
+        ].join("\n");
+
+        navigator.clipboard.writeText(text).then(() => {
+            const btn = document.getElementById("btn-val-copy");
+            btn.textContent = "Copied!";
+            btn.classList.add("copied");
+            setTimeout(() => {
+                btn.textContent = "Copy to clipboard";
+                btn.classList.remove("copied");
+            }, 2000);
+        }).catch(() => {
+            // Fallback for non-HTTPS contexts
+            const ta = document.createElement("textarea");
+            ta.value = text;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand("copy");
+            document.body.removeChild(ta);
+        });
     }
 
     return { init, toggle };

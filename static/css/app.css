@@ -787,6 +787,36 @@ html, body {
     color: var(--tor-watch);
 }
 
+.val-note {
+    font-size: 8px;
+    color: var(--text-muted);
+    text-align: center;
+    margin-bottom: 6px;
+    line-height: 1.3;
+}
+
+.val-copy-btn {
+    width: 100%;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    padding: 4px;
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 10px;
+    font-family: monospace;
+}
+
+.val-copy-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.val-copy-btn.copied {
+    border-color: #22c55e;
+    color: #22c55e;
+}
+
 .validation-crosshair {
     cursor: crosshair !important;
 }
