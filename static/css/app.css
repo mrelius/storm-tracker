@@ -729,6 +729,72 @@ html, body {
     display: none !important;
 }
 
+/* Validation Mode */
+.validation-panel {
+    position: absolute;
+    top: 50px;
+    left: 16px;
+    z-index: 1001;
+    background: rgba(10, 14, 23, 0.95);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: 10px 14px;
+    width: 220px;
+    font-size: 11px;
+    font-family: 'Consolas', 'Monaco', monospace;
+}
+
+.val-header {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 1.5px;
+    margin-bottom: 8px;
+    text-align: center;
+}
+
+.val-section {
+    margin-bottom: 4px;
+}
+
+.val-label {
+    font-size: 9px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.val-value {
+    color: var(--text-primary);
+    font-size: 12px;
+}
+
+.val-divider {
+    border-top: 1px solid var(--border);
+    margin: 6px 0;
+}
+
+.val-alignment {
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.val-ok {
+    color: #22c55e;
+}
+
+.val-warn {
+    color: var(--tor-watch);
+}
+
+.validation-crosshair {
+    cursor: crosshair !important;
+}
+
+.validation-crosshair .leaflet-interactive {
+    cursor: crosshair !important;
+}
+
 /* Focus flash animation */
 .focus-flash {
     animation: flash-fade 1.5s ease-out forwards;

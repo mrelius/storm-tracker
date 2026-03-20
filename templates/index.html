@@ -29,6 +29,7 @@
             <div id="top-bar-right">
                 <span id="radar-timestamp" class="radar-info">Radar: --</span>
                 <span id="radar-age" class="radar-info"></span>
+                <button id="btn-validation-toggle" class="radar-btn" title="Validation Mode" style="font-size:11px;padding:3px 8px;">VAL</button>
                 <button id="btn-toggle-panel" title="Toggle Alert Panel">&#9776;</button>
             </div>
         </div>
@@ -61,6 +62,40 @@
 
         <!-- Source Labels -->
         <div id="source-labels" class="source-labels hidden"></div>
+
+        <!-- Validation Panel -->
+        <div id="validation-panel" class="validation-panel hidden">
+            <div class="val-header">VALIDATION MODE</div>
+            <div class="val-section">
+                <div class="val-label">Coordinates</div>
+                <div id="val-coords" class="val-value">—</div>
+            </div>
+            <div class="val-section">
+                <div class="val-label">REF (approx)</div>
+                <div id="val-ref" class="val-value">—</div>
+            </div>
+            <div class="val-section">
+                <div class="val-label">SRV (approx)</div>
+                <div id="val-srv" class="val-value">—</div>
+            </div>
+            <div class="val-section">
+                <div class="val-label">CC (exact)</div>
+                <div id="val-cc" class="val-value">click map to sample</div>
+            </div>
+            <div class="val-divider"></div>
+            <div class="val-section">
+                <div class="val-label">Timestamps</div>
+                <div id="val-timestamps" class="val-value">—</div>
+            </div>
+            <div class="val-section">
+                <div id="val-alignment" class="val-alignment">Alignment: N/A</div>
+            </div>
+            <div class="val-divider"></div>
+            <div class="val-section">
+                <div class="val-label">Layer Health</div>
+                <div id="val-health" class="val-value">—</div>
+            </div>
+        </div>
 
         <!-- SRV Velocity Legend -->
         <div id="srv-legend" class="srv-legend hidden">
@@ -115,6 +150,7 @@
     <script src="/static/js/radar-manager.js"></script>
     <script src="/static/js/alert-renderer.js"></script>
     <script src="/static/js/alert-panel.js"></script>
+    <script src="/static/js/validation.js"></script>
     <script src="/static/js/app.js"></script>
     <script>
         if ("serviceWorker" in navigator) {
