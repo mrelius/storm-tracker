@@ -53,7 +53,7 @@ class RainViewerProvider(RadarProvider):
         frame_time = datetime.fromtimestamp(timestamp, tz=timezone.utc)
         rules = LAYER_RULES["reflectivity"]
 
-        tile_url = f"https://tilecache.rainviewer.com{path}/256/{{z}}/{{x}}/{{y}}/2/1_1.png"
+        tile_url = f"/proxy/rainviewer{path}/256/{{z}}/{{x}}/{{y}}/2/1_1.png"
 
         return RadarLayerInfo(
             product_id="reflectivity",

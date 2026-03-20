@@ -97,6 +97,44 @@ async def root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
+@app.get("/proxy/rainviewer/{path:path}")
+async def proxy_rainviewer_tiles(path: str):
+    """Reverse proxy RainViewer tiles."""
+    import httpx as _httpx
+    from fastapi.responses import Response as _Resp
+    try:
+        async with _httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"https://tilecache.rainviewer.com/{path}")
+            if resp.status_code == 200:
+                return _Resp(
+                    content=resp.content,
+                    media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=300"},
+                )
+            return _Resp(content=b"", status_code=resp.status_code)
+    except Exception:
+        return _Resp(content=b"", status_code=502)
+
+
+@app.get("/proxy/iem/{path:path}")
+async def proxy_iem_tiles(path: str):
+    """Reverse proxy IEM SRV tiles so browser doesn't need cross-origin access."""
+    import httpx as _httpx
+    from fastapi.responses import Response as _Resp
+    try:
+        async with _httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/{path}")
+            if resp.status_code == 200:
+                return _Resp(
+                    content=resp.content,
+                    media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=120"},
+                )
+            return _Resp(content=b"", status_code=resp.status_code)
+    except Exception:
+        return _Resp(content=b"", status_code=502)
+
+
 @app.get("/proxy/cc/{path:path}")
 async def proxy_cc_tiles(path: str):
     """Reverse proxy CC tiles from LXC 121 so browser doesn't need direct access."""

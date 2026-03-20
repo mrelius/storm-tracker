@@ -55,7 +55,8 @@ class IEMRadarProvider(RadarProvider):
         return ["srv"]
 
     def _build_tile_url(self, iem_product: str) -> str:
-        return (f"{IEM_TILE_BASE}/ridge::{self._site_id}-{iem_product}-0"
+        """Build tile URL through LXC 119 proxy (browser can't do cross-origin reliably)."""
+        return (f"/proxy/iem/ridge::{self._site_id}-{iem_product}-0"
                 "/{z}/{x}/{y}.png")
 
     async def _check_availability(self, iem_product: str) -> bool:
