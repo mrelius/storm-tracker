@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Storm Tracker</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body>
+    <div id="app">
+        <!-- Map Container -->
+        <div id="map"></div>
+
+        <!-- Staleness Warning Banner -->
+        <div id="staleness-banner" class="staleness-banner hidden"></div>
+
+        <!-- Top Bar -->
+        <div id="top-bar">
+            <div id="top-bar-left">
+                <span id="app-title">STORM TRACKER</span>
+                <span id="mode-badge" class="badge badge-basic">BASIC</span>
+                <span id="offline-indicator" class="badge badge-offline hidden">OFFLINE</span>
+            </div>
+            <div id="top-bar-center">
+                <span id="location-display">Locating...</span>
+                <span id="data-freshness" class="radar-info">Alerts: --</span>
+            </div>
+            <div id="top-bar-right">
+                <span id="radar-timestamp" class="radar-info">Radar: --</span>
+                <span id="radar-age" class="radar-info"></span>
+                <button id="btn-toggle-panel" title="Toggle Alert Panel">&#9776;</button>
+            </div>
+        </div>
+
+        <!-- Radar Controls -->
+        <div id="radar-controls">
+            <button id="btn-radar-toggle" class="radar-btn" title="Toggle Reflectivity">
+                <span class="radar-icon">&#9729;</span> REF
+            </button>
+            <button id="btn-srv-toggle" class="radar-btn" title="Toggle Storm Relative Velocity">
+                SRV
+            </button>
+            <button id="btn-cc-toggle" class="radar-btn btn-unavailable" title="Correlation Coefficient — not yet available" disabled>
+                CC
+            </button>
+            <span id="radar-site-label" class="radar-info hidden"></span>
+            <span id="radar-loading" class="radar-loading hidden">Loading radar...</span>
+            <div id="animation-controls" class="hidden">
+                <button id="btn-anim-play" class="radar-btn" title="Play/Pause">&#9654;</button>
+                <input id="anim-scrubber" type="range" min="0" max="12" value="0" title="Scrub frames">
+                <input id="anim-speed" type="range" min="1" max="5" value="2" title="Animation Speed">
+                <span id="anim-frame-info">--/--</span>
+            </div>
+            <span id="anim-paused-notice" class="anim-notice hidden">Paused — SRV is a single scan</span>
+        </div>
+        <div id="radar-error" class="radar-error hidden">
+            <span class="radar-error-msg">Radar unavailable</span>
+            <button onclick="RadarManager.retryRadar()" class="radar-retry-btn">Retry</button>
+        </div>
+
+        <!-- Source Labels -->
+        <div id="source-labels" class="source-labels hidden"></div>
+
+        <!-- SRV Velocity Legend -->
+        <div id="srv-legend" class="srv-legend hidden">
+            <div class="srv-legend-title">Velocity (kt)</div>
+            <div class="srv-legend-bar">
+                <span class="srv-label-left">-64</span>
+                <div class="srv-gradient"></div>
+                <span class="srv-label-right">+64</span>
+            </div>
+            <div class="srv-legend-labels">
+                <span>toward</span>
+                <span>away</span>
+            </div>
+        </div>
+
+        <!-- Alert Side Panel -->
+        <div id="alert-panel" class="panel-open">
+            <div id="panel-header">
+                <h2>Active Alerts <span id="alert-count" class="badge">0</span></h2>
+                <div id="sort-controls">
+                    <label>Sort:</label>
+                    <select id="sort-field">
+                        <option value="severity" selected>Severity</option>
+                        <option value="distance">Distance</option>
+                        <option value="issued">Issued</option>
+                        <option value="expiration">Expiration</option>
+                    </select>
+                    <button id="btn-sort-order" title="Toggle sort order">&#9660;</button>
+                </div>
+                <div id="filter-controls">
+                    <button class="filter-btn active" data-category="">All</button>
+                    <button class="filter-btn" data-category="primary">Primary</button>
+                    <button class="filter-btn" data-category="secondary">Secondary</button>
+                    <span class="filter-sep">|</span>
+                    <button id="btn-warnings-toggle" class="filter-btn filter-btn-warn" title="Tornado + Severe T-Storm warnings only">Warnings</button>
+                    <button id="btn-marine-toggle" class="filter-btn" title="Show/hide marine alerts">Marine</button>
+                </div>
+            </div>
+            <div id="alert-list"></div>
+            <!-- Alert Detail Overlay -->
+            <div id="alert-detail" class="hidden">
+                <button id="btn-detail-close">&times;</button>
+                <div id="detail-content"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="/static/js/state.js"></script>
+    <script src="/static/js/location.js"></script>
+    <script src="/static/js/map.js"></script>
+    <script src="/static/js/radar-manager.js"></script>
+    <script src="/static/js/alert-renderer.js"></script>
+    <script src="/static/js/alert-panel.js"></script>
+    <script src="/static/js/app.js"></script>
+    <script>
+        if ("serviceWorker" in navigator) {
+            navigator.serviceWorker.register("/static/sw.js").catch(() => {});
+        }
+    </script>
+</body>
+</html>

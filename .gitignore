@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+data/storm_tracker.db
+data/storm_tracker.db-wal
+data/storm_tracker.db-shm
+data/smoke_test.db
+.env
+.pytest_cache/
