@@ -8,7 +8,7 @@ const StormState = (function () {
         srv:          { opacity: 0.65, overlayEligible: true,  requiresAdvanced: false },
         cc:           { opacity: 0.55, overlayEligible: true,  requiresAdvanced: false },
     };
-    const ADVANCED_ONLY_COMBOS = [new Set(["srv", "cc"])];
+    const ADVANCED_ONLY_COMBOS = [];
     const MAX_ACTIVE_LAYERS = 2;
 
     const EVENT_COLORS = {

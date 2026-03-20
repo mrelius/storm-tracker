@@ -62,8 +62,8 @@ LAYER_RULES = {
     },
 }
 
-# SRV + CC together requires advanced mode
-ADVANCED_ONLY_COMBOS = [{"srv", "cc"}]
+# No combos restricted to advanced mode — SRV + CC are designed to work together
+ADVANCED_ONLY_COMBOS = []
 
 MAX_ACTIVE_LAYERS = 2
 

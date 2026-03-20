@@ -41,11 +41,10 @@ def test_two_layers_allowed():
     assert ok is True
 
 
-def test_srv_cc_blocked_basic():
-    """AC-8: SRV + CC blocked in basic mode."""
-    ok, reason = can_activate_layer("cc", ["srv"], AppMode.basic)
-    assert ok is False
-    assert "advanced" in reason.lower()
+def test_srv_cc_allowed_basic():
+    """SRV + CC allowed in basic mode (site-aligned, designed to work together)."""
+    ok, _ = can_activate_layer("cc", ["srv"], AppMode.basic)
+    assert ok is True
 
 
 def test_srv_cc_allowed_advanced():
