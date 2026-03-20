@@ -723,8 +723,9 @@ html, body {
     height: 10px;
     border-radius: 2px;
     background: linear-gradient(to right,
-        #8b0000, #ff0000, #ff8c00, #ffd700,
-        #add8e6, #6495ed, #1e90ff, #0000ff, #00008b
+        #6600aa, #9900cc, #cc33ff,
+        #d28c50, #deb887,
+        #b4d2e6, #6495ed, #1e90ff, #005adc
     );
 }
 
@@ -749,8 +750,8 @@ html, body {
     flex-shrink: 0;
 }
 
-.cc-low { background: #ff0000; }
-.cc-mid { background: #ffd700; }
+.cc-low { background: #9900cc; }
+.cc-mid { background: #d28c50; }
 .cc-high { background: #1e90ff; }
 
 /* Radar Error/Retry */
