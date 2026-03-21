@@ -133,33 +133,9 @@ html, body {
     background: var(--bg-card);
 }
 
-/* Header minimized state — collapses to thin strip */
+/* Header minimized state — fully hidden */
 .header-minimized #top-bar {
-    height: 0;
-    overflow: hidden;
-    border-bottom: none;
-    padding: 0;
-    pointer-events: none;
-}
-
-.header-minimized #btn-minimize-header {
-    position: fixed;
-    top: 4px;
-    right: 48px;
-    z-index: 1001;
-    pointer-events: all;
-    opacity: 0.6;
-    background: rgba(10, 14, 23, 0.8);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    color: var(--text-primary);
-    font-size: 11px;
-    padding: 3px 8px;
-    cursor: pointer;
-}
-
-.header-minimized #btn-minimize-header:hover {
-    opacity: 1;
+    display: none;
 }
 
 .header-minimized #alert-panel {
@@ -168,6 +144,31 @@ html, body {
 
 .header-minimized #staleness-banner {
     top: 0;
+}
+
+/* Floating restore button — lives outside top-bar flow */
+#header-restore {
+    display: none;
+    position: fixed;
+    top: 6px;
+    left: 6px;
+    z-index: 1100;
+    background: rgba(10, 14, 23, 0.85);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-muted);
+    font-size: 11px;
+    padding: 4px 10px;
+    cursor: pointer;
+}
+
+#header-restore:hover {
+    color: var(--text-primary);
+    border-color: var(--accent);
+}
+
+.header-minimized #header-restore {
+    display: block;
 }
 
 /* Radar Controls */

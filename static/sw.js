@@ -2,7 +2,7 @@
  * Storm Tracker — Service Worker
  * Caches app shell + static assets. Serves stale alerts when offline.
  */
-const CACHE_NAME = "storm-tracker-v33";
+const CACHE_NAME = "storm-tracker-v34";
 const SHELL_ASSETS = [
     "/",
     "/static/css/app.css",
