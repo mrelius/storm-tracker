@@ -294,8 +294,23 @@ def _alert_to_dict(alert: StormAlert) -> dict:
     if alert.eta_min is not None:
         prev = _prev_etas.get(alert.alert_id)
         if prev is not None:
-            eta_delta = round(abs(alert.eta_min - prev) * 60, 1)  # in seconds
+            eta_delta = round(abs(alert.eta_min - prev) * 60, 1)
         _prev_etas[alert.alert_id] = alert.eta_min
+
+    # Confidence level — derived from real factors
+    # track_confidence: track age + continuity (0-1)
+    # motion_confidence: speed/heading stability (0-1)
+    # ETA availability adds confidence
+    tc = alert.track_confidence
+    mc = alert.motion_confidence
+    has_eta = alert.eta_min is not None
+    conf_score = tc * 0.4 + mc * 0.4 + (0.2 if has_eta else 0)
+    if conf_score >= 0.6:
+        confidence_level = "high"
+    elif conf_score >= 0.3:
+        confidence_level = "medium"
+    else:
+        confidence_level = "low"
 
     return {
         # Identity
@@ -312,7 +327,8 @@ def _alert_to_dict(alert: StormAlert) -> dict:
         "updated_at": alert.updated_at,
         "expires_at": alert.expires_at,
         "freshness": round(now - alert.updated_at, 1),
-        "eta_delta_sec": eta_delta,  # debug: ETA change since last cycle (seconds)
+        "eta_delta_sec": eta_delta,
+        "confidence_level": confidence_level,
         # Location
         "lat": alert.lat,
         "lon": alert.lon,

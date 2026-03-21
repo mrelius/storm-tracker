@@ -241,10 +241,12 @@ const StormAlertPanel = (function () {
         // Motion line: trend + direction + confidence qualifier
         const motionText = formatMotion(alert);
 
-        // Distance + ETA
+        // Distance + ETA + confidence
         const distText = alert.distance_mi != null ? `${Math.round(alert.distance_mi)} mi` : "";
         const etaText = stabilizeETA(alert);
-        const metaParts = [distText, motionText, etaText].filter(Boolean).join(" · ");
+        const confLevel = alert.confidence_level;
+        const confText = confLevel && confLevel !== "low" ? confLevel : "";
+        const metaParts = [distText, motionText, etaText, confText].filter(Boolean).join(" · ");
 
         // Freshness
         const freshText = formatFreshness(alert.freshness);
@@ -261,7 +263,9 @@ const StormAlertPanel = (function () {
             <span>sev:${alert.impact_severity_label || '?'}</span>
             <span>conf:${(alert.confidence || 0).toFixed(2)}</span>
             ${alert.time_to_cpa_min ? `<span>cpa:${Math.round(alert.time_to_cpa_min)}m</span>` : ''}
+            ${alert.eta_min ? `<span>eta:${Math.round(alert.eta_min)}m</span>` : ''}
             ${alert.eta_delta_sec != null ? `<span>ETA\u0394:${alert.eta_delta_sec}s</span>` : ''}
+            <span>conf:${alert.confidence_level || '?'}</span>
         </div>`;
 
         // Use impact_description as primary message when available (more context)

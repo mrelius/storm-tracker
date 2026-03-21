@@ -132,7 +132,20 @@ async def simulate_storm(scenario: str = "direct_hit", lat: float = 39.5, lon: f
             tracked = tracker.update(candidates)
             adapter._tracked_storms = tracked
             adapter._base_candidates = candidates
-            await run_cycle_once(ref_lat=lat, ref_lon=lon)
+            # Run per-client broadcast WITHOUT refresh_base_candidates (would wipe sim data)
+            from services.detection.alert_service import _broadcast_per_client
+            from services.detection.alert_engine import get_store, run_alert_cycle
+            from services.detection.ws_manager import get_ws_manager as _gwm
+            # Run detection for default path
+            from services.detection.adapter import evaluate_for_client, get_pipeline
+            det = evaluate_for_client(lat, lon, get_pipeline())
+            store = get_store()
+            store.update_from_detections(det.events)
+            store.expire_stale()
+            # Broadcast to WS clients
+            mgr = _gwm()
+            if mgr.client_count > 0:
+                await _broadcast_per_client(mgr, settings)
 
         task = asyncio.create_task(run_timed_scenario(scenario, lat, lon, inject))
         set_active_task(task)
@@ -151,7 +164,13 @@ async def simulate_storm(scenario: str = "direct_hit", lat: float = 39.5, lon: f
     tracked = tracker.update(candidates)
     adapter._tracked_storms = tracked
     adapter._base_candidates = candidates
-    await run_cycle_once(ref_lat=lat, ref_lon=lon)
+    # Run detection directly (skip NWS refresh which would wipe sim data)
+    from services.detection.adapter import evaluate_for_client, get_pipeline
+    from services.detection.alert_engine import get_store
+    det = evaluate_for_client(lat, lon, get_pipeline())
+    store = get_store()
+    store.update_from_detections(det.events)
+    store.expire_stale()
 
     return {
         "scenario": scenario, "type": "instant",

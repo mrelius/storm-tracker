@@ -87,6 +87,10 @@ TIMED_SCENARIOS = {
         "description": "Storm B overtakes storm A in priority (48s)",
         "steps": 6, "interval": 8,
     },
+    "tracked_storm": {
+        "description": "Persistent storm with stable motion — produces real ETA (80s, 10 steps)",
+        "steps": 10, "interval": 8,
+    },
 }
 
 _escalation_count = 0
@@ -165,10 +169,34 @@ def _priority_flip_step(step, lat, lon):
     ]
 
 
+def _tracked_storm_step(step, lat, lon):
+    """Persistent storm with consistent NE movement toward user.
+
+    Moves ~0.03° per step (≈2mi), heading NE.
+    Consistent high reflectivity to maintain detection.
+    Designed to build tracking history → produce real ETA.
+    """
+    # Start 20mi SW of user, move NE consistently
+    storm_lat = lat - 0.3 + step * 0.03
+    storm_lon = lon - 0.3 + step * 0.03
+    return [BaseStormCandidate(
+        id="sim_tracked_1",
+        lat=round(storm_lat, 4),
+        lon=round(storm_lon, 4),
+        reflectivity_dbz=60,
+        velocity_delta=42,
+        cc_min=None,
+        nws_event="Severe Thunderstorm Warning",
+        nws_severity="Extreme",
+        last_updated=time.time(),
+    )]
+
+
 STEP_FUNCTIONS = {
     "slow_mover": _slow_mover_step,
     "weakening_storm": _weakening_step,
     "priority_flip": _priority_flip_step,
+    "tracked_storm": _tracked_storm_step,
 }
 
 
