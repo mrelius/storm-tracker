@@ -201,7 +201,7 @@ const StormAlertPanel = (function () {
         const confClass = `sa-conf-${tier}`;
         const primaryClass = isPrimary ? "sa-primary" : "";
 
-        // Status badge (escalated > new > primary > confidence tier)
+        // Status badge
         let statusBadge = "";
         if (alert.status === "escalated") {
             statusBadge = '<span class="sa-badge sa-escalated">ESCALATED</span>';
@@ -213,18 +213,20 @@ const StormAlertPanel = (function () {
             statusBadge = '<span class="sa-badge sa-developing">DEVELOPING</span>';
         }
 
-        // Distance
+        // Motion line: trend + direction + confidence qualifier
+        const motionText = formatMotion(alert);
+
+        // Distance + ETA
         const distText = alert.distance_mi != null ? `${Math.round(alert.distance_mi)} mi` : "";
-
-        // ETA stabilization: hold last displayed ETA unless change is significant
         const etaText = stabilizeETA(alert);
+        const metaParts = [distText, motionText, etaText].filter(Boolean).join(" · ");
 
-        // Direction
-        const dirText = alert.direction && alert.direction !== "unknown" ? alert.direction : "";
+        // Freshness
+        const freshText = formatFreshness(alert.freshness);
 
-        const metaParts = [distText, dirText, etaText].filter(Boolean).join(" · ");
-
-        const reasonText = alert.threat_reason ? `<div class="sa-reason">${escapeHtml(alert.threat_reason)}</div>` : "";
+        // Threat reason (primary only)
+        const reasonLine = isPrimary && alert.threat_reason
+            ? `<div class="sa-reason">${escapeHtml(alert.threat_reason)}</div>` : "";
 
         return `<div class="storm-alert-card ${sevClass} ${confClass} ${primaryClass}" data-lat="${alert.lat}" data-lon="${alert.lon}" data-alert-id="${alert.alert_id || ''}">
             <div class="sa-header">
@@ -233,7 +235,8 @@ const StormAlertPanel = (function () {
             </div>
             <div class="sa-message">${escapeHtml(alert.message)}</div>
             ${metaParts ? `<div class="sa-meta">${metaParts}</div>` : ""}
-            ${isPrimary && reasonText ? reasonText : ""}
+            ${reasonLine}
+            ${freshText ? `<div class="sa-freshness">${freshText}</div>` : ""}
         </div>`;
     }
 
@@ -264,6 +267,32 @@ const StormAlertPanel = (function () {
         // Meaningful change — update
         lastETAs[id] = rounded;
         return `ETA ~${rounded}m`;
+    }
+
+    function formatMotion(alert) {
+        const trend = alert.trend || "unknown";
+        const dir = alert.direction && alert.direction !== "unknown" ? alert.direction : "";
+        const conf = alert.trend_confidence || 0;
+
+        if (trend === "closing") {
+            let text = dir ? `Approaching from ${dir}` : "Approaching";
+            if (conf < 0.3) text += ", developing";
+            return text;
+        }
+        if (trend === "departing") {
+            return dir ? `Moving away to ${dir}` : "Moving away";
+        }
+        // unknown trend
+        if (dir) return dir;
+        return "";
+    }
+
+    function formatFreshness(freshness) {
+        if (freshness == null || freshness < 0) return "";
+        if (freshness < 10) return "Updated just now";
+        if (freshness < 60) return `Updated ${Math.round(freshness)}s ago`;
+        if (freshness < 300) return `Updated ${Math.round(freshness / 60)}m ago`;
+        return "Data may be stale";
     }
 
     function severityClass(sev) {
