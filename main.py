@@ -15,6 +15,7 @@ from config import get_settings
 from db import init_db, seed_counties
 import cache
 from services.nws_ingest import run_ingest_loop, stop_ingest
+from services.detection.alert_service import run_alert_loop, stop_alert_loop
 from services.radar.registry import register
 from services.radar.rainviewer import RainViewerProvider
 from services.radar.iem import IEMRadarProvider
@@ -26,6 +27,7 @@ logging.basicConfig(level=settings.log_level, format="%(asctime)s [%(name)s] %(l
 logger = logging.getLogger(__name__)
 
 _ingest_task: asyncio.Task | None = None
+_alert_task: asyncio.Task | None = None
 
 
 @asynccontextmanager
@@ -42,20 +44,23 @@ async def lifespan(app: FastAPI):
     register(IEMRadarProvider(site_id="ILN"))  # default: Wilmington OH (Ohio Valley)
     register(NexradCCProvider())
 
-    # Start background ingest
+    # Start background tasks
     _ingest_task = asyncio.create_task(run_ingest_loop())
+    _alert_task = asyncio.create_task(run_alert_loop())
     logger.info("Storm Tracker started")
 
     yield
 
     # Shutdown
     stop_ingest()
-    if _ingest_task:
-        _ingest_task.cancel()
-        try:
-            await _ingest_task
-        except asyncio.CancelledError:
-            pass
+    stop_alert_loop()
+    for task in [_ingest_task, _alert_task]:
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
     logger.info("Storm Tracker stopped")
 
 

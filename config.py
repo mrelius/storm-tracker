@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     default_lon: float = -84.5
     default_location_name: str = "Ohio Valley"
 
+    alert_poll_interval: int = 60       # seconds between detection/alert cycles
+    alert_history_capacity: int = 100   # max recent history entries
+
     log_level: str = "INFO"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
