@@ -95,6 +95,40 @@ app.include_router(health.router)
 app.include_router(detections.router)
 app.include_router(storm_alerts.router)
 
+@app.get("/api/debug/features")
+async def debug_features():
+    """Show active feature phases and system version."""
+    return {
+        "version": "2.0.0-phase20",
+        "phases": {
+            "1-4": "detection engine + frontend",
+            "5": "background polling + history",
+            "6": "websocket push",
+            "7": "audio notifications",
+            "8": "browser notifications",
+            "9": "per-client location",
+            "10": "client-relative detection",
+            "11": "storm persistence + tracking",
+            "12": "confidence + signal quality",
+            "13": "UI truthfulness + ETA stability",
+            "14": "threat prioritization",
+            "15": "canonical alert schema",
+            "16": "motion + freshness UI",
+            "17": "intensity trend + heading fix",
+            "18": "smoothing + prediction",
+            "19": "impact prediction (CPA)",
+            "20": "storm footprint + severity projection",
+        },
+        "alert_schema_fields": [
+            "trend", "speed_mph", "heading_deg", "intensity_trend",
+            "impact", "impact_description", "cpa_distance_mi", "time_to_cpa_min",
+            "storm_radius_mi", "projected_severity_label", "impact_severity_label",
+            "impact_severity_score", "freshness", "threat_score", "threat_reason",
+            "track_confidence", "motion_confidence", "trend_confidence",
+        ],
+    }
+
+
 @app.websocket("/ws/storm-alerts")
 async def storm_alerts_ws(ws: WebSocket):
     import json as _json
