@@ -19,7 +19,7 @@ from services.radar.registry import register
 from services.radar.rainviewer import RainViewerProvider
 from services.radar.iem import IEMRadarProvider
 from services.radar.nexrad_cc import NexradCCProvider
-from routers import alerts, radar, location, health, detections
+from routers import alerts, radar, location, health, detections, storm_alerts
 
 settings = get_settings()
 logging.basicConfig(level=settings.log_level, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
@@ -87,6 +87,7 @@ app.include_router(radar.router)
 app.include_router(location.router)
 app.include_router(health.router)
 app.include_router(detections.router)
+app.include_router(storm_alerts.router)
 
 app.mount("/data", StaticFiles(directory="data"), name="data")
 app.mount("/static", StaticFiles(directory="static"), name="static")
