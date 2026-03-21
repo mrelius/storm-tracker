@@ -364,6 +364,26 @@ html, body {
     border-left-width: 4px;
 }
 
+/* Confidence tier styling */
+.storm-alert-card.sa-conf-low {
+    opacity: 0.7;
+    border-left-style: dashed;
+}
+
+.storm-alert-card.sa-conf-med {
+    /* default — no additional styling */
+}
+
+.storm-alert-card.sa-conf-high {
+    border-left-width: 4px;
+}
+
+.sa-developing {
+    background: var(--text-muted);
+    color: var(--bg-primary);
+    font-size: 8px;
+}
+
 .sa-header {
     display: flex;
     justify-content: space-between;

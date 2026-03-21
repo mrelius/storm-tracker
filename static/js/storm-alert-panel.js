@@ -8,11 +8,13 @@ const StormAlertPanel = (function () {
     const POLL_INTERVAL = 30000;
     const WS_RECONNECT_BASE = 5000;
     const WS_RECONNECT_MAX = 30000;
+    const ETA_CHANGE_THRESHOLD = 2;  // minutes — ignore smaller ETA changes
     let pollTimer = null;
     let ws = null;
     let wsReconnectDelay = WS_RECONNECT_BASE;
     let wsReconnectTimer = null;
     let lastAlertIds = "";
+    let lastETAs = {};  // alertId → last displayed ETA
 
     function init() {
         // Start polling as fallback
@@ -156,7 +158,10 @@ const StormAlertPanel = (function () {
         badge.classList.toggle("badge-urgent", alerts.some(a => a.severity >= 3));
 
         // Stable refresh: skip rerender if alert set unchanged
-        const newIds = alerts.map(a => `${a.alert_id}:${a.severity}:${a.status}`).join(",");
+        // Include confidence tier so tier changes trigger rerender, but tiny fluctuations don't
+        const newIds = alerts.map(a =>
+            `${a.alert_id}:${a.severity}:${a.status}:${confTier(a.confidence)}`
+        ).join(",");
         if (newIds === lastAlertIds) return;
         lastAlertIds = newIds;
 
@@ -187,18 +192,32 @@ const StormAlertPanel = (function () {
 
     function buildCard(alert) {
         const sevClass = severityClass(alert.severity);
-        const statusBadge = alert.status === "escalated"
-            ? '<span class="sa-badge sa-escalated">ESCALATED</span>'
-            : alert.status === "new"
-            ? '<span class="sa-badge sa-new">NEW</span>'
-            : "";
+        const conf = alert.confidence || 0;
+        const tier = confTier(conf);
+        const confClass = `sa-conf-${tier}`;
 
+        // Status badge (escalated > new > confidence tier)
+        let statusBadge = "";
+        if (alert.status === "escalated") {
+            statusBadge = '<span class="sa-badge sa-escalated">ESCALATED</span>';
+        } else if (alert.status === "new") {
+            statusBadge = '<span class="sa-badge sa-new">NEW</span>';
+        } else if (tier === "low") {
+            statusBadge = '<span class="sa-badge sa-developing">DEVELOPING</span>';
+        }
+
+        // Distance
         const distText = alert.distance_mi != null ? `${Math.round(alert.distance_mi)} mi` : "";
-        const etaText = alert.eta_min != null && alert.eta_min > 0 ? `ETA ${Math.round(alert.eta_min)}m` : "";
-        const metaParts = [distText, alert.direction !== "unknown" ? alert.direction : "", etaText]
-            .filter(Boolean).join(" · ");
 
-        return `<div class="storm-alert-card ${sevClass}" data-lat="${alert.lat}" data-lon="${alert.lon}">
+        // ETA stabilization: hold last displayed ETA unless change is significant
+        const etaText = stabilizeETA(alert);
+
+        // Direction
+        const dirText = alert.direction && alert.direction !== "unknown" ? alert.direction : "";
+
+        const metaParts = [distText, dirText, etaText].filter(Boolean).join(" · ");
+
+        return `<div class="storm-alert-card ${sevClass} ${confClass}" data-lat="${alert.lat}" data-lon="${alert.lon}" data-alert-id="${alert.alert_id || ''}">
             <div class="sa-header">
                 <span class="sa-title">${escapeHtml(alert.title)}</span>
                 ${statusBadge}
@@ -206,6 +225,35 @@ const StormAlertPanel = (function () {
             <div class="sa-message">${escapeHtml(alert.message)}</div>
             ${metaParts ? `<div class="sa-meta">${metaParts}</div>` : ""}
         </div>`;
+    }
+
+    function confTier(confidence) {
+        if (confidence >= 0.6) return "high";
+        if (confidence >= 0.3) return "med";
+        return "low";
+    }
+
+    function stabilizeETA(alert) {
+        const id = alert.alert_id || alert.storm_id || "";
+        const newETA = alert.eta_min;
+
+        if (newETA == null || newETA <= 0) {
+            // ETA disappeared — clear stored value, show nothing
+            delete lastETAs[id];
+            return "";
+        }
+
+        const prev = lastETAs[id];
+        const rounded = Math.round(newETA);
+
+        if (prev != null && Math.abs(rounded - prev) < ETA_CHANGE_THRESHOLD) {
+            // Change too small — hold previous display
+            return `ETA ~${prev}m`;
+        }
+
+        // Meaningful change — update
+        lastETAs[id] = rounded;
+        return `ETA ~${rounded}m`;
     }
 
     function severityClass(sev) {
