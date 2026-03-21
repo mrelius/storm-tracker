@@ -5,7 +5,8 @@ GET /api/storm-alert-history — returns recent alert lifecycle history
 """
 from fastapi import APIRouter
 from pydantic import BaseModel
-from services.detection.alert_service import get_snapshot, get_history
+from services.detection.alert_service import get_snapshot, get_history, _alert_to_dict
+from services.detection.threat import rank_alerts
 
 router = APIRouter(prefix="/api/storm-alerts", tags=["storm-alerts"])
 
@@ -32,7 +33,8 @@ class StormAlertOut(BaseModel):
 
 
 class StormAlertResponse(BaseModel):
-    alerts: list[StormAlertOut]
+    primary_threat: dict | None = None
+    alerts: list[dict]
     count: int
     updated_at: float
     detections_processed: int
@@ -68,33 +70,13 @@ async def get_storm_alerts():
     No recomputation on each request.
     """
     snap = get_snapshot()
-
-    alerts_out = []
-    for a in snap.alerts:
-        alerts_out.append(StormAlertOut(
-            alert_id=a.alert_id,
-            storm_id=a.storm_id,
-            type=a.type,
-            severity=a.severity,
-            confidence=a.confidence,
-            title=a.title,
-            message=a.message,
-            status=a.status.value,
-            created_at=a.created_at,
-            updated_at=a.updated_at,
-            expires_at=a.expires_at,
-            distance_mi=a.distance_mi,
-            direction=a.direction,
-            bearing_deg=a.bearing_deg,
-            eta_min=a.eta_min,
-            lat=a.lat,
-            lon=a.lon,
-            speed_mph=a.speed_mph,
-        ))
+    alert_dicts = [_alert_to_dict(a) for a in snap.alerts]
+    ranked = rank_alerts(alert_dicts)
 
     return StormAlertResponse(
-        alerts=alerts_out,
-        count=snap.count,
+        primary_threat=ranked["primary_threat"],
+        alerts=ranked["alerts"],
+        count=ranked["count"],
         updated_at=snap.updated_at,
         detections_processed=snap.detections_processed,
         alerts_changed=snap.alerts_changed,

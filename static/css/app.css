@@ -384,6 +384,25 @@ html, body {
     font-size: 8px;
 }
 
+/* Primary threat designation */
+.storm-alert-card.sa-primary {
+    border: 1px solid var(--accent);
+    box-shadow: 0 0 6px rgba(59, 130, 246, 0.2);
+}
+
+.sa-primary-badge {
+    background: var(--accent);
+    color: white;
+    font-size: 8px;
+}
+
+.sa-reason {
+    font-size: 9px;
+    color: var(--text-muted);
+    font-style: italic;
+    margin-top: 2px;
+}
+
 .sa-header {
     display: flex;
     justify-content: space-between;

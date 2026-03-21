@@ -17,6 +17,7 @@ from services.detection.alert_engine import (
     AlertStore, AlertStatus, StormAlert,
     get_store, run_alert_cycle, format_message,
 )
+from services.detection.threat import ThreatRanker
 from services.detection.adapter import refresh_base_candidates, evaluate_for_client
 from services.detection.geometry import haversine_mi, compute_bearing, bearing_to_direction
 from services.detection.models import DetectionType
@@ -198,11 +199,17 @@ async def _broadcast_per_client(manager, settings):
                     if time.time() - alert.updated_at < 5:
                         await manager.send_to(ws, _alert_ws_payload("expired", alert))
 
-            # Send client-specific snapshot
+            # Rank alerts by threat score
+            alert_dicts = [_alert_to_dict(a) for a in active]
+            ranker = ctx.get_threat_ranker()
+            ranked = ranker.rank(alert_dicts)
+
+            # Send client-specific snapshot with ranking
             snapshot_msg = {
                 "type": "snapshot",
-                "alerts": [_alert_to_dict(a) for a in active],
-                "count": len(active),
+                "primary_threat": ranked["primary_threat"],
+                "alerts": ranked["alerts"],
+                "count": ranked["count"],
                 "updated_at": time.time(),
                 "cycle_status": "ok",
                 "location_source": loc_source,
@@ -243,15 +250,20 @@ def stop_alert_loop():
 
 
 def build_client_snapshot(ctx: ClientContext) -> dict:
-    """Build a client-specific snapshot using client's own alert store."""
+    """Build a client-specific snapshot using client's own alert store + threat ranking."""
     alert_store = ctx.get_alert_store()
     active = alert_store.get_active_alerts()
     loc_source = "client" if ctx.using_client_location else "default"
 
+    alert_dicts = [_alert_to_dict(a) for a in active]
+    ranker = ctx.get_threat_ranker()
+    ranked = ranker.rank(alert_dicts)
+
     return {
         "type": "snapshot",
-        "alerts": [_alert_to_dict(a) for a in active],
-        "count": len(active),
+        "primary_threat": ranked["primary_threat"],
+        "alerts": ranked["alerts"],
+        "count": ranked["count"],
         "updated_at": time.time(),
         "cycle_status": "ok",
         "location_source": loc_source,

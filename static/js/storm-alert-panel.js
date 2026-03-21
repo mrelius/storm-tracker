@@ -89,7 +89,7 @@ const StormAlertPanel = (function () {
     function handleWSMessage(msg) {
         switch (msg.type) {
             case "snapshot":
-                render(msg.alerts || []);
+                render(msg.alerts || [], msg.primary_threat);
                 updateLocationSource(msg.location_source);
                 break;
             case "created":
@@ -140,7 +140,7 @@ const StormAlertPanel = (function () {
             const resp = await fetch(`/api/storm-alerts?${params}`);
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const data = await resp.json();
-            render(data.alerts || []);
+            render(data.alerts || [], data.primary_threat);
         } catch (e) {
             console.error("Storm alert fetch failed:", e);
             renderError();
@@ -149,7 +149,7 @@ const StormAlertPanel = (function () {
 
     // --- Render ---
 
-    function render(alerts) {
+    function render(alerts, primaryThreat) {
         const container = document.getElementById("storm-alert-list");
         const badge = document.getElementById("storm-alert-count");
         if (!container) return;
@@ -158,10 +158,10 @@ const StormAlertPanel = (function () {
         badge.classList.toggle("badge-urgent", alerts.some(a => a.severity >= 3));
 
         // Stable refresh: skip rerender if alert set unchanged
-        // Include confidence tier so tier changes trigger rerender, but tiny fluctuations don't
+        const primaryId = primaryThreat ? primaryThreat.alert_id : "";
         const newIds = alerts.map(a =>
             `${a.alert_id}:${a.severity}:${a.status}:${confTier(a.confidence)}`
-        ).join(",");
+        ).join(",") + "|" + primaryId;
         if (newIds === lastAlertIds) return;
         lastAlertIds = newIds;
 
@@ -174,7 +174,11 @@ const StormAlertPanel = (function () {
         const hasCritical = alerts.some(a => a.severity >= 3);
         document.getElementById("storm-alert-section").classList.toggle("has-critical", hasCritical);
 
-        container.innerHTML = alerts.map(buildCard).join("");
+        const html = alerts.map((a, i) => {
+            const isPrimary = primaryThreat && a.alert_id === primaryThreat.alert_id;
+            return buildCard(a, isPrimary);
+        }).join("");
+        container.innerHTML = html;
         StormAudio.cleanup();
         StormNotify.cleanup();
 
@@ -190,18 +194,21 @@ const StormAlertPanel = (function () {
         });
     }
 
-    function buildCard(alert) {
+    function buildCard(alert, isPrimary) {
         const sevClass = severityClass(alert.severity);
         const conf = alert.confidence || 0;
         const tier = confTier(conf);
         const confClass = `sa-conf-${tier}`;
+        const primaryClass = isPrimary ? "sa-primary" : "";
 
-        // Status badge (escalated > new > confidence tier)
+        // Status badge (escalated > new > primary > confidence tier)
         let statusBadge = "";
         if (alert.status === "escalated") {
             statusBadge = '<span class="sa-badge sa-escalated">ESCALATED</span>';
         } else if (alert.status === "new") {
             statusBadge = '<span class="sa-badge sa-new">NEW</span>';
+        } else if (isPrimary) {
+            statusBadge = '<span class="sa-badge sa-primary-badge">PRIMARY</span>';
         } else if (tier === "low") {
             statusBadge = '<span class="sa-badge sa-developing">DEVELOPING</span>';
         }
@@ -217,13 +224,16 @@ const StormAlertPanel = (function () {
 
         const metaParts = [distText, dirText, etaText].filter(Boolean).join(" · ");
 
-        return `<div class="storm-alert-card ${sevClass} ${confClass}" data-lat="${alert.lat}" data-lon="${alert.lon}" data-alert-id="${alert.alert_id || ''}">
+        const reasonText = alert.threat_reason ? `<div class="sa-reason">${escapeHtml(alert.threat_reason)}</div>` : "";
+
+        return `<div class="storm-alert-card ${sevClass} ${confClass} ${primaryClass}" data-lat="${alert.lat}" data-lon="${alert.lon}" data-alert-id="${alert.alert_id || ''}">
             <div class="sa-header">
                 <span class="sa-title">${escapeHtml(alert.title)}</span>
                 ${statusBadge}
             </div>
             <div class="sa-message">${escapeHtml(alert.message)}</div>
             ${metaParts ? `<div class="sa-meta">${metaParts}</div>` : ""}
+            ${isPrimary && reasonText ? reasonText : ""}
         </div>`;
     }
 

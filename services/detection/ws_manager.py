@@ -38,6 +38,14 @@ class ClientContext:
             self._alert_store = AlertStore()
         return self._alert_store
 
+    _threat_ranker: object = field(default=None, repr=False)
+
+    def get_threat_ranker(self):
+        if self._threat_ranker is None:
+            from services.detection.threat import ThreatRanker
+            self._threat_ranker = ThreatRanker()
+        return self._threat_ranker
+
 
 class AlertWSManager:
     """Manages WebSocket connections with per-client location context."""
