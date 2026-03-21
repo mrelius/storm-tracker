@@ -73,15 +73,24 @@ def compute_threat_score(alert: dict) -> float:
     confidence = alert.get("confidence", 0.5)
     conf_score = confidence * 100
 
+    # Impact modifier
+    impact = alert.get("impact", "uncertain")
+    impact_mod = {
+        "direct_hit": 1.2,
+        "near_miss": 1.0,
+        "passing": 0.7,
+        "uncertain": 0.9,
+    }.get(impact, 0.9)
+
     # Composite
     score = (
         type_score * W_TYPE
         + prox * W_PROXIMITY
         + trend_val * W_TREND
         + conf_score * W_CONFIDENCE
-    )
+    ) * impact_mod
 
-    return round(score, 1)
+    return round(min(100, score), 1)
 
 
 def explain_score(alert: dict, score: float) -> str:

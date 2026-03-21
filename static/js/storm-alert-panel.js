@@ -270,6 +270,14 @@ const StormAlertPanel = (function () {
     }
 
     function formatMotion(alert) {
+        // Impact-first wording when available
+        const impact = alert.impact;
+        const impactDesc = alert.impact_description;
+        if (impact === "direct_hit" && impactDesc) return impactDesc;
+        if (impact === "near_miss" && impactDesc) return impactDesc;
+        if (impact === "passing" && impactDesc) return impactDesc;
+
+        // Fallback to trend-based wording
         const trend = alert.trend || "unknown";
         const dir = alert.direction && alert.direction !== "unknown" ? alert.direction : "";
         const conf = alert.trend_confidence || 0;
@@ -282,12 +290,11 @@ const StormAlertPanel = (function () {
             text = dir ? `Approaching from ${dir}${speedText}` : `Approaching${speedText}`;
             if (conf < 0.3) text += ", developing";
         } else if (trend === "departing") {
-            text = dir ? `Moving away${speedText}` : `Moving away${speedText}`;
+            text = `Moving away${speedText}`;
         } else {
             text = dir || "";
         }
 
-        // Intensity qualifier
         if (intensity === "strengthening") {
             text += text ? ", strengthening" : "Strengthening";
         } else if (intensity === "weakening") {

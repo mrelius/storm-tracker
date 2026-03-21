@@ -102,6 +102,12 @@ class StormAlert:
     # Intensity
     intensity_trend: str = "unknown"
 
+    # Impact analysis
+    impact: str = "uncertain"
+    impact_description: str = ""
+    cpa_distance_mi: float | None = None
+    time_to_cpa_min: float | None = None
+
 
 def _update_alert_fields(alert: StormAlert, event: DetectionEvent):
     """Update an existing alert's location/motion/confidence fields from a detection event."""
@@ -118,6 +124,10 @@ def _update_alert_fields(alert: StormAlert, event: DetectionEvent):
     alert.motion_confidence = event.motion_confidence
     alert.trend_confidence = event.trend_confidence
     alert.intensity_trend = getattr(event, "intensity_trend", "unknown")
+    alert.impact = getattr(event, "impact", "uncertain")
+    alert.impact_description = getattr(event, "impact_description", "")
+    alert.cpa_distance_mi = getattr(event, "cpa_distance_mi", None)
+    alert.time_to_cpa_min = getattr(event, "time_to_cpa_min", None)
 
 
 def _alert_key(storm_id: str, detection_type: str) -> str:
@@ -190,6 +200,10 @@ def create_alert_from_event(event: DetectionEvent) -> StormAlert:
         motion_confidence=event.motion_confidence,
         trend_confidence=event.trend_confidence,
         intensity_trend=getattr(event, "intensity_trend", "unknown"),
+        impact=getattr(event, "impact", "uncertain"),
+        impact_description=getattr(event, "impact_description", ""),
+        cpa_distance_mi=getattr(event, "cpa_distance_mi", None),
+        time_to_cpa_min=getattr(event, "time_to_cpa_min", None),
     )
 
 
