@@ -95,6 +95,67 @@ app.include_router(health.router)
 app.include_router(detections.router)
 app.include_router(storm_alerts.router)
 
+@app.get("/api/debug/simulate")
+async def simulate_storm(scenario: str = "direct_hit", lat: float = 39.5, lon: float = -84.5):
+    """Inject synthetic storms into the real detection pipeline.
+
+    Scenarios: direct_hit, near_miss, multi_storm, escalation
+    """
+    from services.detection.simulator import get_scenario_candidates, list_scenarios
+    from services.detection.adapter import _base_candidates, _tracked_storms, get_tracker
+    from services.detection.alert_service import run_cycle_once
+    import services.detection.adapter as adapter
+
+    if scenario == "list":
+        return {"scenarios": list_scenarios()}
+
+    candidates = get_scenario_candidates(scenario, lat, lon)
+    if not candidates:
+        return {"error": f"Unknown scenario: {scenario}", "available": list(list_scenarios().keys())}
+
+    # Inject into tracker (bypasses NWS fetch)
+    tracker = get_tracker()
+    tracked = tracker.update(candidates)
+    adapter._tracked_storms = tracked
+    adapter._base_candidates = candidates
+
+    # Run alert cycle with injected data
+    await run_cycle_once(ref_lat=lat, ref_lon=lon)
+
+    return {
+        "scenario": scenario,
+        "candidates_injected": len(candidates),
+        "tracked_storms": len(tracked),
+        "message": f"Simulation '{scenario}' active. Check /api/storm-alerts or UI.",
+    }
+
+
+@app.get("/api/debug/simulate/reset")
+async def reset_simulation():
+    """Clear all simulation and alert state."""
+    from services.detection.simulator import reset_simulation as _reset
+    from services.detection.adapter import get_tracker, get_pipeline
+    from services.detection.alert_engine import get_store
+    from services.detection.ws_manager import get_ws_manager
+    import services.detection.adapter as adapter
+    _reset()
+    get_tracker().clear()
+    get_pipeline().reset()
+    get_store().clear()
+    adapter._base_candidates = []
+    adapter._tracked_storms = []
+    for ctx in get_ws_manager().get_all_contexts():
+        ctx.get_pipeline().reset()
+        ctx.get_alert_store().clear()
+        ctx.get_threat_ranker().reset()
+        ctx.get_state_tracker().clear()
+        ctx.get_notification_gate().clear()
+    # Clear global snapshot
+    from services.detection.alert_service import reset_service
+    reset_service()
+    return {"message": "Simulation and alert state fully reset"}
+
+
 @app.get("/api/debug/features")
 async def debug_features():
     """Show active feature phases and system version."""

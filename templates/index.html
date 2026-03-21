@@ -6,7 +6,7 @@
     <title>Storm Tracker</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="stylesheet" href="/static/css/app.css?v=22" />
+    <link rel="stylesheet" href="/static/css/app.css?v=23" />
 </head>
 <body>
     <div id="app">
@@ -140,6 +140,16 @@
                     <h3>Storm Alerts <span id="storm-alert-count" class="badge">0</span> <span id="ws-status" class="ws-indicator ws-disconnected" title="Live updates"></span> <button id="btn-sound-toggle" class="sound-toggle" title="Alert sound">🔔</button> <button id="btn-notify-toggle" class="sound-toggle" title="Browser notifications">🔇</button></h3>
                 </div>
                 <div id="alert-location-source" class="alert-loc-source">Default location</div>
+                <div class="sa-sim-row">
+                    <select id="sim-scenario" class="sim-select">
+                        <option value="">Simulate...</option>
+                        <option value="direct_hit">Direct Hit</option>
+                        <option value="near_miss">Near Miss</option>
+                        <option value="multi_storm">Multi Storm</option>
+                        <option value="escalation">Escalation</option>
+                    </select>
+                    <button class="sim-btn" id="btn-sim-reset">Reset</button>
+                </div>
                 <div id="storm-alert-list">
                     <div class="storm-alert-empty">No active storm alerts</div>
                 </div>
@@ -176,17 +186,17 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="/static/js/state.js?v=22"></script>
-    <script src="/static/js/location.js?v=22"></script>
-    <script src="/static/js/map.js?v=22"></script>
-    <script src="/static/js/radar-manager.js?v=22"></script>
-    <script src="/static/js/alert-renderer.js?v=22"></script>
-    <script src="/static/js/alert-panel.js?v=22"></script>
-    <script src="/static/js/storm-audio.js?v=22"></script>
-    <script src="/static/js/storm-notify.js?v=22"></script>
-    <script src="/static/js/storm-alert-panel.js?v=22"></script>
-    <script src="/static/js/validation.js?v=22"></script>
-    <script src="/static/js/app.js?v=22"></script>
+    <script src="/static/js/state.js?v=23"></script>
+    <script src="/static/js/location.js?v=23"></script>
+    <script src="/static/js/map.js?v=23"></script>
+    <script src="/static/js/radar-manager.js?v=23"></script>
+    <script src="/static/js/alert-renderer.js?v=23"></script>
+    <script src="/static/js/alert-panel.js?v=23"></script>
+    <script src="/static/js/storm-audio.js?v=23"></script>
+    <script src="/static/js/storm-notify.js?v=23"></script>
+    <script src="/static/js/storm-alert-panel.js?v=23"></script>
+    <script src="/static/js/validation.js?v=23"></script>
+    <script src="/static/js/app.js?v=23"></script>
     <script>
         if ("serviceWorker" in navigator) {
             navigator.serviceWorker.register("/static/sw.js").catch(() => {});

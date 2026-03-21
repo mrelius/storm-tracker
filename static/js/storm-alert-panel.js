@@ -17,15 +17,32 @@ const StormAlertPanel = (function () {
     let lastETAs = {};  // alertId → last displayed ETA
 
     function init() {
-        // Start polling as fallback
         fetchAndRender();
         pollTimer = setInterval(fetchAndRender, POLL_INTERVAL);
-
-        // Connect WebSocket (primary fast path)
         connectWS();
-
-        // Re-subscribe when location changes
         StormState.on("locationChanged", () => sendSubscribe());
+
+        // Simulation controls
+        const simSelect = document.getElementById("sim-scenario");
+        if (simSelect) {
+            simSelect.addEventListener("change", async () => {
+                const scenario = simSelect.value;
+                if (!scenario) return;
+                const loc = StormState.state.location;
+                const lat = loc.lat || 39.5;
+                const lon = loc.lon || -84.5;
+                await fetch(`/api/debug/simulate?scenario=${scenario}&lat=${lat}&lon=${lon}`);
+                simSelect.value = "";
+                fetchAndRender();
+            });
+        }
+        const simReset = document.getElementById("btn-sim-reset");
+        if (simReset) {
+            simReset.addEventListener("click", async () => {
+                await fetch("/api/debug/simulate/reset");
+                fetchAndRender();
+            });
+        }
     }
 
     function sendSubscribe() {
@@ -166,7 +183,13 @@ const StormAlertPanel = (function () {
         lastAlertIds = newIds;
 
         if (alerts.length === 0) {
-            container.innerHTML = '<div class="storm-alert-empty">No active storm alerts</div>';
+            const wsOk = ws && ws.readyState === WebSocket.OPEN;
+            container.innerHTML = `<div class="storm-alert-empty">
+                <div class="sa-status-icon">&#9737;</div>
+                <div>No active severe weather</div>
+                <div class="sa-status-sub">System monitoring${wsOk ? " · Live" : ""}</div>
+                <button class="sa-test-btn" onclick="StormAlertPanel.testAlert()">Test Alert</button>
+            </div>`;
             document.getElementById("storm-alert-section").classList.remove("has-critical");
             return;
         }
@@ -228,6 +251,15 @@ const StormAlertPanel = (function () {
         const reasonLine = isPrimary && alert.threat_reason
             ? `<div class="sa-reason">${escapeHtml(alert.threat_reason)}</div>` : "";
 
+        // Debug overlay (hidden by default, toggled with D key)
+        const debugInfo = `<div class="sa-debug-info hidden">
+            <span>threat:${alert.threat_score || '?'}</span>
+            <span>impact:${alert.impact || '?'}</span>
+            <span>sev:${alert.impact_severity_label || '?'}</span>
+            <span>conf:${(alert.confidence || 0).toFixed(2)}</span>
+            ${alert.time_to_cpa_min ? `<span>cpa:${Math.round(alert.time_to_cpa_min)}m</span>` : ''}
+        </div>`;
+
         return `<div class="storm-alert-card ${sevClass} ${confClass} ${primaryClass}" data-lat="${alert.lat}" data-lon="${alert.lon}" data-alert-id="${alert.alert_id || ''}">
             <div class="sa-header">
                 <span class="sa-title">${escapeHtml(alert.title)}</span>
@@ -237,6 +269,7 @@ const StormAlertPanel = (function () {
             ${metaParts ? `<div class="sa-meta">${metaParts}</div>` : ""}
             ${reasonLine}
             ${freshText ? `<div class="sa-freshness">${freshText}</div>` : ""}
+            ${debugInfo}
         </div>`;
     }
 
@@ -343,5 +376,35 @@ const StormAlertPanel = (function () {
         return div.innerHTML;
     }
 
-    return { init, fetchAndRender };
+    // --- Test Alert ---
+    async function testAlert() {
+        try {
+            const loc = StormState.state.location;
+            const lat = loc.lat || 39.5;
+            const lon = loc.lon || -84.5;
+            await fetch(`/api/debug/simulate?scenario=direct_hit&lat=${lat}&lon=${lon}`);
+            fetchAndRender();
+        } catch (e) {
+            console.warn("Test alert failed:", e);
+        }
+    }
+
+    // --- Debug Overlay ---
+    let debugVisible = false;
+
+    function toggleDebug() {
+        debugVisible = !debugVisible;
+        document.querySelectorAll(".sa-debug-info").forEach(el => {
+            el.classList.toggle("hidden", !debugVisible);
+        });
+    }
+
+    // Keyboard shortcut: D key toggles debug
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "d" && !e.ctrlKey && !e.metaKey && e.target.tagName !== "INPUT") {
+            toggleDebug();
+        }
+    });
+
+    return { init, fetchAndRender, testAlert, toggleDebug };
 })();
