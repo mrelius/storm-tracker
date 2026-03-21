@@ -103,10 +103,14 @@ class StormAlert:
     intensity_trend: str = "unknown"
 
     # Impact analysis
+    storm_radius_mi: float = 5.0
     impact: str = "uncertain"
     impact_description: str = ""
     cpa_distance_mi: float | None = None
     time_to_cpa_min: float | None = None
+    projected_severity_label: str = "unknown"
+    impact_severity_label: str = "unknown"
+    impact_severity_score: int = 0
 
 
 def _update_alert_fields(alert: StormAlert, event: DetectionEvent):
@@ -124,10 +128,14 @@ def _update_alert_fields(alert: StormAlert, event: DetectionEvent):
     alert.motion_confidence = event.motion_confidence
     alert.trend_confidence = event.trend_confidence
     alert.intensity_trend = getattr(event, "intensity_trend", "unknown")
+    alert.storm_radius_mi = getattr(event, "storm_radius_mi", 5.0)
     alert.impact = getattr(event, "impact", "uncertain")
     alert.impact_description = getattr(event, "impact_description", "")
     alert.cpa_distance_mi = getattr(event, "cpa_distance_mi", None)
     alert.time_to_cpa_min = getattr(event, "time_to_cpa_min", None)
+    alert.projected_severity_label = getattr(event, "projected_severity_label", "unknown")
+    alert.impact_severity_label = getattr(event, "impact_severity_label", "unknown")
+    alert.impact_severity_score = getattr(event, "impact_severity_score", 0)
 
 
 def _alert_key(storm_id: str, detection_type: str) -> str:

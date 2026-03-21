@@ -312,10 +312,14 @@ def _alert_to_dict(alert: StormAlert) -> dict:
         "predicted_lon": getattr(alert, "predicted_lon", 0),
         "prediction_minutes": getattr(alert, "prediction_minutes", 0),
         # Impact
+        "storm_radius_mi": getattr(alert, "storm_radius_mi", 5.0),
         "impact": getattr(alert, "impact", "uncertain"),
         "impact_description": getattr(alert, "impact_description", ""),
         "cpa_distance_mi": getattr(alert, "cpa_distance_mi", None),
         "time_to_cpa_min": getattr(alert, "time_to_cpa_min", None),
+        "projected_severity_label": getattr(alert, "projected_severity_label", "unknown"),
+        "impact_severity_label": getattr(alert, "impact_severity_label", "unknown"),
+        "impact_severity_score": getattr(alert, "impact_severity_score", 0),
     }
 
 

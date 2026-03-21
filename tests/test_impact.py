@@ -1,6 +1,6 @@
 """Tests for impact prediction — CPA, classification, and integration (Phase 19)."""
 from services.detection.impact import (
-    compute_impact, DIRECT_HIT_MI, NEAR_MISS_MI, _offset_direction,
+    compute_impact, GLANCE_MARGIN_MI, _offset_direction,
 )
 
 
@@ -15,7 +15,7 @@ class TestCPA:
             motion_confidence=0.8,
         )
         assert result["impact"] == "direct_hit"
-        assert result["cpa_distance_mi"] < DIRECT_HIT_MI
+        assert result["cpa_distance_mi"] < 5.0  # default storm radius
         assert result["time_to_cpa_min"] > 0
 
     def test_parallel_miss(self):
@@ -29,7 +29,7 @@ class TestCPA:
         )
         # Storm moves east, client is 0.5° north → miss by ~35 miles
         assert result["impact"] in ("passing", "near_miss")
-        assert result["cpa_distance_mi"] > DIRECT_HIT_MI
+        assert result["cpa_distance_mi"] > 5.0  # default storm radius
 
     def test_near_miss(self):
         """Storm passes close but offset."""
@@ -78,7 +78,7 @@ class TestCPA:
 
 class TestClassification:
     def test_direct_hit_threshold(self):
-        """Storm heading at client with slight offset ≤ DIRECT_HIT_MI."""
+        """Storm heading at client with slight offset ≤ 5.0  # default storm radius."""
         result = compute_impact(
             storm_lat=39.0, storm_lon=-84.5,
             heading_deg=0, speed_mph=40,
@@ -164,3 +164,120 @@ class TestIntegration:
         storm = _track_to_storm(track, 39.5, -84.5)  # client north
         assert storm.impact in ("direct_hit", "near_miss", "passing", "uncertain")
         assert storm.impact_description != ""
+
+
+# === Phase 20: Footprint + Severity ===
+
+class TestRadius:
+    def test_strong_storm(self):
+        from services.detection.impact import compute_radius
+        r = compute_radius(60)
+        assert 6 <= r <= 10
+
+    def test_severe_storm(self):
+        from services.detection.impact import compute_radius
+        r = compute_radius(70)
+        assert r >= 10
+
+    def test_weak_storm(self):
+        from services.detection.impact import compute_radius
+        r = compute_radius(35)
+        assert r <= 3
+
+    def test_debris_bonus(self):
+        from services.detection.impact import compute_radius
+        r_no = compute_radius(60, has_debris=False)
+        r_yes = compute_radius(60, has_debris=True)
+        assert r_yes > r_no
+
+    def test_capped(self):
+        from services.detection.impact import compute_radius, MAX_RADIUS_MI
+        r = compute_radius(99, has_debris=True)
+        assert r <= MAX_RADIUS_MI
+
+    def test_none_dbz(self):
+        from services.detection.impact import compute_radius
+        r = compute_radius(None)
+        assert r >= 1  # minimum for weak
+
+
+class TestAreaAwareClassification:
+    def test_within_radius_is_direct_hit(self):
+        """Storm with 7mi radius, CPA of 5mi → direct_hit."""
+        result = compute_impact(
+            39.0, -84.5, 0, 30, 39.5, -84.5, 0.8,
+            storm_radius_mi=7.0, reflectivity_dbz=60,
+        )
+        assert result["impact"] == "direct_hit"
+
+    def test_outside_radius_but_within_margin(self):
+        """CPA > radius but within glance margin → near_miss."""
+        result = compute_impact(
+            39.0, -84.6, 0, 30, 39.5, -84.5, 0.8,
+            storm_radius_mi=3.0, reflectivity_dbz=45,
+        )
+        # CPA ~6mi, radius 3mi, margin 5mi → 3+5=8mi → near_miss
+        assert result["impact"] in ("direct_hit", "near_miss")
+
+    def test_small_radius_changes_classification(self):
+        """Same storm with small radius should be further from direct_hit."""
+        r_big = compute_impact(
+            39.0, -84.55, 0, 30, 39.5, -84.5, 0.8,
+            storm_radius_mi=10.0, reflectivity_dbz=65,
+        )
+        r_small = compute_impact(
+            39.0, -84.55, 0, 30, 39.5, -84.5, 0.8,
+            storm_radius_mi=2.0, reflectivity_dbz=35,
+        )
+        # Big radius more likely to be direct_hit
+        assert r_big["impact"] in ("direct_hit", "near_miss")
+
+
+class TestSeverityProjection:
+    def test_strong_stable(self):
+        from services.detection.impact import project_severity
+        label, score = project_severity(60, "stable")
+        assert label in ("strong", "severe")
+        assert score >= 60
+
+    def test_strong_strengthening(self):
+        from services.detection.impact import project_severity
+        label, score = project_severity(58, "strengthening")
+        assert label == "severe"
+        assert score > 70
+
+    def test_strong_weakening(self):
+        from services.detection.impact import project_severity
+        label, score = project_severity(58, "weakening")
+        assert label == "moderate"
+        assert score < 70
+
+    def test_weak_storm(self):
+        from services.detection.impact import project_severity
+        label, score = project_severity(30, "stable")
+        assert label == "weak"
+        assert score < 30
+
+    def test_distant_reduces_score(self):
+        from services.detection.impact import project_severity
+        _, near = project_severity(60, "stable", time_to_cpa_min=10)
+        _, far = project_severity(60, "stable", time_to_cpa_min=60)
+        assert far <= near
+
+
+class TestImpactSeverityScore:
+    def test_direct_hit_severe(self):
+        result = compute_impact(
+            39.0, -84.5, 0, 40, 39.5, -84.5, 0.9,
+            storm_radius_mi=10.0, reflectivity_dbz=65,
+            intensity_trend="strengthening",
+        )
+        assert result["impact_severity_label"] in ("critical", "high")
+        assert result["impact_severity_score"] >= 50
+
+    def test_passing_low(self):
+        result = compute_impact(
+            39.0, -85.5, 90, 30, 39.5, -84.5, 0.8,
+            storm_radius_mi=5.0, reflectivity_dbz=50,
+        )
+        assert result["impact_severity_label"] in ("low", "moderate")

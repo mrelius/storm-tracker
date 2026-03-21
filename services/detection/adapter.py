@@ -31,7 +31,7 @@ from services.detection.geometry import (
 )
 from services.detection.pipeline import DetectionPipeline
 from services.detection.tracker import get_tracker, StormTrack, compute_trend
-from services.detection.impact import compute_impact
+from services.detection.impact import compute_impact, compute_radius
 
 logger = logging.getLogger(__name__)
 
@@ -174,13 +174,21 @@ def _track_to_storm(
     # Use smoothed speed when available for more stable ETA
     speed = track.smoothed_speed if track.smoothed_speed > 0 else track.speed_mph
 
-    # Impact analysis
+    # Storm footprint
+    has_debris = (track.cc_min is not None and track.cc_min < 0.80
+                  and track.reflectivity_dbz is not None and track.reflectivity_dbz > 45)
+    radius = compute_radius(track.reflectivity_dbz, has_debris)
+
+    # Impact analysis (area-aware)
     impact_data = compute_impact(
         storm_lat=track.lat, storm_lon=track.lon,
         heading_deg=track.smoothed_heading if track.smoothed_heading > 0 else track.heading_deg,
         speed_mph=speed,
         client_lat=ref_lat, client_lon=ref_lon,
         motion_confidence=track.motion_confidence,
+        storm_radius_mi=radius,
+        reflectivity_dbz=track.reflectivity_dbz,
+        intensity_trend=track.intensity_trend,
     )
 
     return StormObject(
@@ -201,10 +209,15 @@ def _track_to_storm(
         predicted_lat=track.predicted_lat,
         predicted_lon=track.predicted_lon,
         prediction_minutes=track.prediction_minutes,
+        storm_radius_mi=radius,
         cpa_distance_mi=impact_data.get("cpa_distance_mi"),
         time_to_cpa_min=impact_data.get("time_to_cpa_min"),
         impact=impact_data.get("impact", "uncertain"),
         impact_description=impact_data.get("impact_description", ""),
+        projected_severity_label=impact_data.get("projected_severity_label", "unknown"),
+        projected_severity_score=impact_data.get("projected_severity_score", 0),
+        impact_severity_label=impact_data.get("impact_severity_label", "unknown"),
+        impact_severity_score=impact_data.get("impact_severity_score", 0),
         track_confidence=track.track_confidence,
         motion_confidence=track.motion_confidence,
         trend_confidence=trend_conf,

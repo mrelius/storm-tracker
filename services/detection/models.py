@@ -47,10 +47,15 @@ class StormObject:
     predicted_lon: float = 0.0
     prediction_minutes: float = 0.0
     # Impact analysis (client-relative)
+    storm_radius_mi: float = 5.0
     cpa_distance_mi: Optional[float] = None
     time_to_cpa_min: Optional[float] = None
-    impact: str = "uncertain"         # direct_hit, near_miss, passing, uncertain
+    impact: str = "uncertain"
     impact_description: str = ""
+    projected_severity_label: str = "unknown"
+    projected_severity_score: int = 0
+    impact_severity_label: str = "unknown"
+    impact_severity_score: int = 0
     track_confidence: float = 0.0
     motion_confidence: float = 0.0
     trend_confidence: float = 0.0
@@ -78,10 +83,14 @@ class DetectionEvent:
     heading_deg: float = 0.0
     trend: str = "unknown"
     intensity_trend: str = "unknown"
+    storm_radius_mi: float = 5.0
     impact: str = "uncertain"
     impact_description: str = ""
     cpa_distance_mi: float | None = None
     time_to_cpa_min: float | None = None
+    projected_severity_label: str = "unknown"
+    impact_severity_label: str = "unknown"
+    impact_severity_score: int = 0
     track_confidence: float = 0.0
     motion_confidence: float = 0.0
     trend_confidence: float = 0.0
