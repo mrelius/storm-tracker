@@ -35,6 +35,9 @@ class StormTrack:
     reflectivity_dbz: float | None = None
     velocity_delta: float | None = None
     cc_min: float | None = None
+    prev_reflectivity_dbz: float | None = None
+    prev_velocity_delta: float | None = None
+    intensity_trend: str = "unknown"  # strengthening, weakening, stable, unknown
     nws_event: str = ""
     nws_severity: str = ""
 
@@ -102,12 +105,16 @@ class StormTracker:
             if len(track.positions) > MAX_HISTORY:
                 track.positions = track.positions[-MAX_HISTORY:]
             track.missed_cycles = 0
+            # Store previous values for intensity trend
+            track.prev_reflectivity_dbz = track.reflectivity_dbz
+            track.prev_velocity_delta = track.velocity_delta
             track.reflectivity_dbz = c.reflectivity_dbz
             track.velocity_delta = c.velocity_delta
             track.cc_min = c.cc_min
             track.nws_event = c.nws_event
             track.nws_severity = c.nws_severity
             _compute_motion(track)
+            _compute_intensity_trend(track)
             matched_track_ids.add(track_id)
             matched_candidates.add(cand_idx)
 
@@ -258,6 +265,29 @@ def _compute_confidence(track: StormTrack):
     track.motion_confidence = round(
         track.track_confidence * (speed_stability * 0.5 + heading_stability * 0.5), 2
     )
+
+
+def _compute_intensity_trend(track: StormTrack):
+    """Compute whether the storm is strengthening, weakening, or stable.
+
+    Compares current vs previous reflectivity/velocity.
+    Threshold: 5 dBZ change or 10 kt velocity change.
+    """
+    if track.prev_reflectivity_dbz is None or track.reflectivity_dbz is None:
+        track.intensity_trend = "unknown"
+        return
+
+    dbz_delta = (track.reflectivity_dbz or 0) - (track.prev_reflectivity_dbz or 0)
+    vel_delta = 0
+    if track.velocity_delta is not None and track.prev_velocity_delta is not None:
+        vel_delta = track.velocity_delta - track.prev_velocity_delta
+
+    if dbz_delta >= 5 or vel_delta >= 10:
+        track.intensity_trend = "strengthening"
+    elif dbz_delta <= -5 or vel_delta <= -10:
+        track.intensity_trend = "weakening"
+    else:
+        track.intensity_trend = "stable"
 
 
 def compute_trend(

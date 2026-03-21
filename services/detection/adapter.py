@@ -185,6 +185,8 @@ def _track_to_storm(
         velocity_delta=track.velocity_delta,
         cc_min=track.cc_min,
         trend=trend,
+        heading_deg=track.heading_deg,        # storm's travel direction (NOT bearing to storm)
+        intensity_trend=track.intensity_trend,
         track_confidence=track.track_confidence,
         motion_confidence=track.motion_confidence,
         trend_confidence=trend_conf,

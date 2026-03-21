@@ -273,18 +273,28 @@ const StormAlertPanel = (function () {
         const trend = alert.trend || "unknown";
         const dir = alert.direction && alert.direction !== "unknown" ? alert.direction : "";
         const conf = alert.trend_confidence || 0;
+        const speed = alert.speed_mph || 0;
+        const speedText = speed >= 5 ? ` at ${Math.round(speed)} mph` : "";
+        const intensity = alert.intensity_trend;
 
+        let text = "";
         if (trend === "closing") {
-            let text = dir ? `Approaching from ${dir}` : "Approaching";
+            text = dir ? `Approaching from ${dir}${speedText}` : `Approaching${speedText}`;
             if (conf < 0.3) text += ", developing";
-            return text;
+        } else if (trend === "departing") {
+            text = dir ? `Moving away${speedText}` : `Moving away${speedText}`;
+        } else {
+            text = dir || "";
         }
-        if (trend === "departing") {
-            return dir ? `Moving away to ${dir}` : "Moving away";
+
+        // Intensity qualifier
+        if (intensity === "strengthening") {
+            text += text ? ", strengthening" : "Strengthening";
+        } else if (intensity === "weakening") {
+            text += text ? ", weakening" : "Weakening";
         }
-        // unknown trend
-        if (dir) return dir;
-        return "";
+
+        return text;
     }
 
     function formatFreshness(freshness) {

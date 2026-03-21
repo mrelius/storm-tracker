@@ -62,9 +62,12 @@ def compute_threat_score(alert: dict) -> float:
         eta_bonus = max(0, min(60, 30 - eta)) * 2  # <30 min = bonus, max 60 pts
         prox = min(100, prox + eta_bonus)
 
-    # Trend score — uses explicit trend field (no proxy inference)
+    # Trend score — uses explicit trend field, modulated by confidence
     trend = alert.get("trend", "unknown")
-    trend_val = TREND_SCORES.get(trend, TREND_SCORES["unknown"])
+    trend_base = TREND_SCORES.get(trend, TREND_SCORES["unknown"])
+    trend_conf = alert.get("trend_confidence", 0.5)
+    # Scale trend influence by confidence (low confidence → weaker signal)
+    trend_val = trend_base * max(0.3, trend_conf)  # floor at 30% to avoid zeroing out
 
     # Confidence (0-1 → 0-100)
     confidence = alert.get("confidence", 0.5)

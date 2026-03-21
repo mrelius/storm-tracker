@@ -93,11 +93,14 @@ class StormAlert:
     # Timing
     eta_min: Optional[float] = None
 
-    # Confidence (explicit, no inference)
-    confidence: float = 0.0       # detection confidence
+    # Confidence
+    confidence: float = 0.0
     track_confidence: float = 0.0
     motion_confidence: float = 0.0
     trend_confidence: float = 0.0
+
+    # Intensity
+    intensity_trend: str = "unknown"
 
 
 def _update_alert_fields(alert: StormAlert, event: DetectionEvent):
@@ -114,6 +117,7 @@ def _update_alert_fields(alert: StormAlert, event: DetectionEvent):
     alert.track_confidence = event.track_confidence
     alert.motion_confidence = event.motion_confidence
     alert.trend_confidence = event.trend_confidence
+    alert.intensity_trend = getattr(event, "intensity_trend", "unknown")
 
 
 def _alert_key(storm_id: str, detection_type: str) -> str:
@@ -185,6 +189,7 @@ def create_alert_from_event(event: DetectionEvent) -> StormAlert:
         track_confidence=event.track_confidence,
         motion_confidence=event.motion_confidence,
         trend_confidence=event.trend_confidence,
+        intensity_trend=getattr(event, "intensity_trend", "unknown"),
     )
 
 

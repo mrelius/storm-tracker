@@ -40,10 +40,12 @@ class StormObject:
     velocity_delta: Optional[float] = None
     cc_min: Optional[float] = None
     trend: Trend = Trend.unknown
-    track_confidence: float = 0.0      # overall track quality (0-1)
-    motion_confidence: float = 0.0     # speed/heading stability (0-1)
-    trend_confidence: float = 0.0      # trend reliability (0-1)
-    last_updated: float = 0.0          # epoch seconds
+    heading_deg: float = 0.0           # storm travel direction (0=N, 90=E)
+    intensity_trend: str = "unknown"   # strengthening, weakening, stable, unknown
+    track_confidence: float = 0.0
+    motion_confidence: float = 0.0
+    trend_confidence: float = 0.0
+    last_updated: float = 0.0
 
 
 @dataclass
@@ -66,6 +68,7 @@ class DetectionEvent:
     speed_mph: float = 0.0
     heading_deg: float = 0.0
     trend: str = "unknown"
+    intensity_trend: str = "unknown"
     track_confidence: float = 0.0
     motion_confidence: float = 0.0
     trend_confidence: float = 0.0

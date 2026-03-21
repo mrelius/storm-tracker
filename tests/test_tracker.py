@@ -270,3 +270,61 @@ class TestEndToEnd:
         result = pipeline.process([storm])
         types = {e.type for e in result.events}
         assert DetectionType.storm_proximity not in types
+
+
+# === Intensity Trend ===
+
+class TestIntensityTrend:
+    def test_strengthening(self):
+        from services.detection.tracker import _compute_intensity_trend
+        track = StormTrack(storm_id="t1", positions=[(39.5, -84.5, 100)])
+        track.prev_reflectivity_dbz = 50
+        track.reflectivity_dbz = 60  # +10 dBZ
+        _compute_intensity_trend(track)
+        assert track.intensity_trend == "strengthening"
+
+    def test_weakening(self):
+        from services.detection.tracker import _compute_intensity_trend
+        track = StormTrack(storm_id="t1", positions=[(39.5, -84.5, 100)])
+        track.prev_reflectivity_dbz = 60
+        track.reflectivity_dbz = 50  # -10 dBZ
+        _compute_intensity_trend(track)
+        assert track.intensity_trend == "weakening"
+
+    def test_stable(self):
+        from services.detection.tracker import _compute_intensity_trend
+        track = StormTrack(storm_id="t1", positions=[(39.5, -84.5, 100)])
+        track.prev_reflectivity_dbz = 55
+        track.reflectivity_dbz = 57  # +2 dBZ (below threshold)
+        _compute_intensity_trend(track)
+        assert track.intensity_trend == "stable"
+
+    def test_unknown_no_previous(self):
+        from services.detection.tracker import _compute_intensity_trend
+        track = StormTrack(storm_id="t1", positions=[(39.5, -84.5, 100)])
+        track.reflectivity_dbz = 60
+        track.prev_reflectivity_dbz = None
+        _compute_intensity_trend(track)
+        assert track.intensity_trend == "unknown"
+
+    def test_velocity_strengthening(self):
+        from services.detection.tracker import _compute_intensity_trend
+        track = StormTrack(storm_id="t1", positions=[(39.5, -84.5, 100)])
+        track.prev_reflectivity_dbz = 55
+        track.reflectivity_dbz = 55  # stable dbz
+        track.prev_velocity_delta = 30
+        track.velocity_delta = 45  # +15 kt
+        _compute_intensity_trend(track)
+        assert track.intensity_trend == "strengthening"
+
+    def test_propagated_to_storm(self):
+        """Intensity trend flows through to StormObject."""
+        tracker = StormTracker()
+        c1 = _candidate(lat=39.5, lon=-84.5, dbz=50)
+        tracker.update([c1])
+        c2 = _candidate(lat=39.5, lon=-84.5, dbz=65)
+        tracks = tracker.update([c2])
+        assert tracks[0].intensity_trend == "strengthening"
+
+        storm = _track_to_storm(tracks[0], 39.5, -84.5)
+        assert storm.intensity_trend == "strengthening"

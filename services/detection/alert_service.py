@@ -305,6 +305,8 @@ def _alert_to_dict(alert: StormAlert) -> dict:
         "track_confidence": alert.track_confidence,
         "motion_confidence": alert.motion_confidence,
         "trend_confidence": alert.trend_confidence,
+        # Intensity
+        "intensity_trend": alert.intensity_trend,
     }
 
 
