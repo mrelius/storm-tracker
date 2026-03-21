@@ -261,16 +261,19 @@ const StormAlertPanel = (function () {
             <span>sev:${alert.impact_severity_label || '?'}</span>
             <span>conf:${(alert.confidence || 0).toFixed(2)}</span>
             ${alert.time_to_cpa_min ? `<span>cpa:${Math.round(alert.time_to_cpa_min)}m</span>` : ''}
+            ${alert.eta_delta_sec != null ? `<span>ETA\u0394:${alert.eta_delta_sec}s</span>` : ''}
         </div>`;
+
+        // Use impact_description as primary message when available (more context)
+        const primaryMsg = alert.impact_description || alert.message || "";
 
         return `<div class="storm-alert-card ${sevClass} ${confClass} ${primaryClass}" data-lat="${alert.lat}" data-lon="${alert.lon}" data-alert-id="${alert.alert_id || ''}">
             <div class="sa-header">
                 <span class="sa-title">${escapeHtml(alert.title)}</span>
                 ${statusBadge}
             </div>
-            <div class="sa-message">${escapeHtml(alert.message)}</div>
+            <div class="sa-message">${escapeHtml(primaryMsg)}</div>
             ${metaParts ? `<div class="sa-meta">${metaParts}</div>` : ""}
-            ${reasonLine}
             ${freshText ? `<div class="sa-freshness">${freshText}</div>` : ""}
             ${debugInfo}
         </div>`;

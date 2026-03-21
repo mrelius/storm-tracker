@@ -282,9 +282,21 @@ def build_client_snapshot(ctx: ClientContext) -> dict:
     }
 
 
+_prev_etas: dict[str, float] = {}  # alert_id → previous eta_min
+
+
 def _alert_to_dict(alert: StormAlert) -> dict:
     """Canonical alert serialization — all fields explicit, no inference downstream."""
     now = time.time()
+
+    # ETA delta (debug metric)
+    eta_delta = None
+    if alert.eta_min is not None:
+        prev = _prev_etas.get(alert.alert_id)
+        if prev is not None:
+            eta_delta = round(abs(alert.eta_min - prev) * 60, 1)  # in seconds
+        _prev_etas[alert.alert_id] = alert.eta_min
+
     return {
         # Identity
         "alert_id": alert.alert_id,
@@ -300,6 +312,7 @@ def _alert_to_dict(alert: StormAlert) -> dict:
         "updated_at": alert.updated_at,
         "expires_at": alert.expires_at,
         "freshness": round(now - alert.updated_at, 1),
+        "eta_delta_sec": eta_delta,  # debug: ETA change since last cycle (seconds)
         # Location
         "lat": alert.lat,
         "lon": alert.lon,
