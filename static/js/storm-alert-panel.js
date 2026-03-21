@@ -75,9 +75,13 @@ const StormAlertPanel = (function () {
                 break;
             case "created":
             case "escalated":
+                // Evaluate for audio BEFORE rendering (uses event data directly)
+                if (msg.alert) {
+                    StormAudio.evaluate(msg.type, msg.alert);
+                }
+                fetchAndRender();
+                break;
             case "expired":
-                // Lifecycle event — trigger a full render from the included data
-                // or just refetch to stay consistent
                 fetchAndRender();
                 break;
             case "pong":
@@ -149,6 +153,7 @@ const StormAlertPanel = (function () {
         document.getElementById("storm-alert-section").classList.toggle("has-critical", hasCritical);
 
         container.innerHTML = alerts.map(buildCard).join("");
+        StormAudio.cleanup();
 
         container.querySelectorAll(".storm-alert-card").forEach(card => {
             card.addEventListener("click", () => {

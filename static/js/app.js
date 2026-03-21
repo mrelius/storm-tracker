@@ -23,6 +23,7 @@
         AlertRenderer.init(map);
         AlertPanel.init();
         StormAlertPanel.init();
+        StormAudio.init();
         Validation.init(map);
 
         // 3. Resolve location
