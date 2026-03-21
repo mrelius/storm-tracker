@@ -30,6 +30,7 @@ from services.detection.geometry import (
     extract_centroid, haversine_mi, compute_bearing, bearing_to_direction,
 )
 from services.detection.pipeline import DetectionPipeline
+from services.detection.tracker import get_tracker, StormTrack, compute_trend
 
 logger = logging.getLogger(__name__)
 
@@ -67,22 +68,31 @@ class BaseStormCandidate:
 
 # Shared base storm candidates — updated by background cycle
 _base_candidates: list[BaseStormCandidate] = []
+# Tracked storms — updated by tracker after each refresh
+_tracked_storms: list[StormTrack] = []
 
 
 def get_base_candidates() -> list[BaseStormCandidate]:
     return list(_base_candidates)
 
 
-async def refresh_base_candidates():
-    """Global phase: fetch NWS alerts, extract centroids, enrich CC.
+def get_tracked_storms() -> list[StormTrack]:
+    return list(_tracked_storms)
 
-    Produces shared BaseStormCandidates consumed by per-client evaluation.
+
+async def refresh_base_candidates():
+    """Global phase: fetch NWS alerts → extract centroids → enrich CC → track.
+
+    Produces shared tracked storms with motion vectors.
     """
-    global _base_candidates
+    global _base_candidates, _tracked_storms
 
     alerts = await fetch_severe_alerts()
     if not alerts:
         _base_candidates = []
+        # Still update tracker with empty candidates (tracks will expire)
+        tracker = get_tracker()
+        _tracked_storms = tracker.update([])
         return
 
     candidates = []
@@ -95,25 +105,29 @@ async def refresh_base_candidates():
         await _enrich_candidates_cc(candidates)
 
     _base_candidates = candidates
-    logger.debug(f"Base candidates refreshed: {len(candidates)}")
+
+    # Update tracker — produces tracked storms with motion vectors
+    tracker = get_tracker()
+    _tracked_storms = tracker.update(candidates)
+    logger.debug(f"Tracked storms: {len(_tracked_storms)} ({tracker.track_count} active tracks)")
 
 
 def evaluate_for_client(
     ref_lat: float, ref_lon: float,
     pipeline: DetectionPipeline,
 ) -> DetectionResult:
-    """Per-client phase: build StormObjects from shared candidates relative to
-    client location, run through the provided detection pipeline.
+    """Per-client phase: build StormObjects from tracked storms relative to
+    client location, with client-relative trend.
 
     Each client should pass their own pipeline instance for independent cooldown state.
     """
-    candidates = get_base_candidates()
-    if not candidates:
+    tracks = get_tracked_storms()
+    if not tracks:
         return DetectionResult(storms_processed=0)
 
     storms = []
-    for c in candidates:
-        storm = _candidate_to_storm(c, ref_lat, ref_lon)
+    for track in tracks:
+        storm = _track_to_storm(track, ref_lat, ref_lon)
         storms.append(storm)
 
     return pipeline.process(storms)
@@ -146,10 +160,36 @@ def _build_candidate(alert: dict) -> BaseStormCandidate | None:
     )
 
 
+def _track_to_storm(
+    track: StormTrack, ref_lat: float, ref_lon: float,
+) -> StormObject:
+    """Convert a tracked storm to a client-relative StormObject with motion data."""
+    distance = haversine_mi(ref_lat, ref_lon, track.lat, track.lon)
+    bearing = compute_bearing(ref_lat, ref_lon, track.lat, track.lon)
+    direction = bearing_to_direction(bearing)
+    trend_str = compute_trend(track, ref_lat, ref_lon)
+    trend = Trend(trend_str) if trend_str in Trend.__members__ else Trend.unknown
+
+    return StormObject(
+        id=track.storm_id,
+        lat=track.lat,
+        lon=track.lon,
+        distance_mi=round(distance, 1),
+        bearing_deg=bearing,
+        direction=direction,
+        speed_mph=track.speed_mph,
+        reflectivity_dbz=track.reflectivity_dbz,
+        velocity_delta=track.velocity_delta,
+        cc_min=track.cc_min,
+        trend=trend,
+        last_updated=track.last_updated,
+    )
+
+
 def _candidate_to_storm(
     c: BaseStormCandidate, ref_lat: float, ref_lon: float,
 ) -> StormObject:
-    """Convert a base candidate to a client-relative StormObject."""
+    """Legacy: convert a base candidate to a StormObject (no motion data)."""
     distance = haversine_mi(ref_lat, ref_lon, c.lat, c.lon)
     bearing = compute_bearing(ref_lat, ref_lon, c.lat, c.lon)
     direction = bearing_to_direction(bearing)

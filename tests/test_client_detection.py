@@ -125,29 +125,33 @@ class TestClientRelativeDetection:
 
 
 class TestEvaluateForClient:
-    def test_with_candidates(self):
+    def test_with_tracked_storms(self):
         import services.detection.adapter as adapter
-        original = adapter._base_candidates
+        from services.detection.tracker import StormTrack
+        original = adapter._tracked_storms
 
-        adapter._base_candidates = [_candidate(lat=39.55, lon=-84.45, dbz=60)]
+        adapter._tracked_storms = [StormTrack(
+            storm_id="st_test", positions=[(39.55, -84.45, 100)],
+            reflectivity_dbz=60, nws_event="TW", nws_severity="Extreme",
+        )]
         pipeline = DetectionPipeline()
         result = evaluate_for_client(39.5, -84.5, pipeline)
         assert result.storms_processed == 1
         assert len(result.events) > 0
 
-        adapter._base_candidates = original
+        adapter._tracked_storms = original
 
-    def test_empty_candidates(self):
+    def test_empty_tracked(self):
         import services.detection.adapter as adapter
-        original = adapter._base_candidates
+        original = adapter._tracked_storms
 
-        adapter._base_candidates = []
+        adapter._tracked_storms = []
         pipeline = DetectionPipeline()
         result = evaluate_for_client(39.5, -84.5, pipeline)
         assert result.storms_processed == 0
         assert result.events == []
 
-        adapter._base_candidates = original
+        adapter._tracked_storms = original
 
 
 class TestDefaultFallback:
