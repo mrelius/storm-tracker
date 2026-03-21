@@ -6,7 +6,7 @@ Broadcasts messages safely, removes dead clients on error.
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 from fastapi import WebSocket
 
@@ -15,13 +15,28 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ClientContext:
-    """Per-connection metadata."""
+    """Per-connection metadata with client-specific detection state."""
     ws: WebSocket
     lat: Optional[float] = None
     lon: Optional[float] = None
     using_client_location: bool = False
     connected_at: float = 0.0
     last_subscribe: float = 0.0
+    # Per-client detection pipeline + alert store (lazy-initialized)
+    _pipeline: object = field(default=None, repr=False)
+    _alert_store: object = field(default=None, repr=False)
+
+    def get_pipeline(self):
+        if self._pipeline is None:
+            from services.detection.pipeline import DetectionPipeline
+            self._pipeline = DetectionPipeline()
+        return self._pipeline
+
+    def get_alert_store(self):
+        if self._alert_store is None:
+            from services.detection.alert_engine import AlertStore
+            self._alert_store = AlertStore()
+        return self._alert_store
 
 
 class AlertWSManager:

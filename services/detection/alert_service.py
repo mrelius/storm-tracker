@@ -15,11 +15,11 @@ from typing import Optional
 from config import get_settings
 from services.detection.alert_engine import (
     AlertStore, AlertStatus, StormAlert,
-    get_store, run_alert_cycle,
+    get_store, run_alert_cycle, format_message,
 )
+from services.detection.adapter import refresh_base_candidates, evaluate_for_client
 from services.detection.geometry import haversine_mi, compute_bearing, bearing_to_direction
-from services.detection.eta import compute_eta
-from services.detection.models import StormObject, Trend
+from services.detection.models import DetectionType
 from services.detection.ws_manager import get_ws_manager, ClientContext
 
 logger = logging.getLogger(__name__)
@@ -100,7 +100,12 @@ async def run_cycle_once(
     ref_lat: float | None = None,
     ref_lon: float | None = None,
 ):
-    """Execute one detection/alert cycle and update snapshot + history.
+    """Execute one detection/alert cycle.
+
+    Phase 10 architecture:
+    1. Global: refresh shared base storm candidates (fetch + enrich, once)
+    2. Default: run detection with default location → update HTTP snapshot
+    3. Per-client: run detection with each client's location → push client-specific results
 
     Protected by async lock to prevent concurrent execution.
     """
@@ -116,27 +121,25 @@ async def run_cycle_once(
         lon = ref_lon if ref_lon is not None else settings.default_lon
 
         try:
-            # Run the full alert cycle
+            # 1. Global: refresh shared base candidates
+            await refresh_base_candidates()
+
+            # 2. Default: run detection + alert cycle for HTTP endpoint
             result = await run_alert_cycle(ref_lat=lat, ref_lon=lon)
 
-            # Record history + collect lifecycle events for WS broadcast
+            # Record history for default path
             store = get_store()
-            ws_events = []
             for alert in result.get("alerts", []):
                 if alert.status == AlertStatus.new:
                     record_history(alert, "created")
-                    ws_events.append(("created", alert))
                 elif alert.status == AlertStatus.escalated:
                     record_history(alert, "escalated")
-                    ws_events.append(("escalated", alert))
-
             for alert in store.get_all_alerts():
                 if alert.status == AlertStatus.expired:
                     if time.time() - alert.updated_at < 5:
                         record_history(alert, "expired")
-                        ws_events.append(("expired", alert))
 
-            # Update snapshot
+            # Update default snapshot (for HTTP endpoint)
             now = time.time()
             _snapshot = AlertSnapshot(
                 alerts=result["alerts"],
@@ -149,24 +152,69 @@ async def run_cycle_once(
                 last_success=now,
             )
 
-            # Broadcast via WebSocket if there are changes or clients
+            # 3. Per-client: evaluate + push for each WS client
             manager = get_ws_manager()
             if manager.client_count > 0:
-                # Send lifecycle events (same for all clients — raw event data)
-                for action, alert in ws_events:
-                    await manager.broadcast(_alert_ws_payload(action, alert))
-
-                # Send per-client reprojected snapshots if anything changed
-                if result["alerts_changed"] > 0 or result["alerts_expired"] > 0 or ws_events:
-                    await manager.send_to_each(
-                        lambda ctx: build_client_snapshot(ctx)
-                    )
+                await _broadcast_per_client(manager, settings)
 
         except Exception as e:
             logger.error(f"Alert cycle failed: {e}")
-            # Preserve last good snapshot, just update status
             _snapshot.cycle_status = "error"
             _snapshot.updated_at = time.time()
+
+
+async def _broadcast_per_client(manager, settings):
+    """Run client-specific detection and push results to each WS client."""
+    dead = []
+    for ws, ctx in list(manager._clients.items()):
+        try:
+            # Determine client reference location
+            if ctx.using_client_location and ctx.lat is not None and ctx.lon is not None:
+                c_lat, c_lon = ctx.lat, ctx.lon
+                loc_source = "client"
+            else:
+                c_lat = settings.default_lat
+                c_lon = settings.default_lon
+                loc_source = "default"
+
+            # Run detection with client's pipeline (independent cooldown)
+            det_result = evaluate_for_client(c_lat, c_lon, ctx.get_pipeline())
+
+            # Update client's alert store
+            alert_store = ctx.get_alert_store()
+            changed = alert_store.update_from_detections(det_result.events)
+            expired = alert_store.expire_stale()
+            active = alert_store.get_active_alerts()
+
+            # Send lifecycle events for this client
+            for alert in changed:
+                if alert.status == AlertStatus.new:
+                    await manager.send_to(ws, _alert_ws_payload("created", alert))
+                elif alert.status == AlertStatus.escalated:
+                    await manager.send_to(ws, _alert_ws_payload("escalated", alert))
+
+            for alert in alert_store.get_all_alerts():
+                if alert.status == AlertStatus.expired:
+                    if time.time() - alert.updated_at < 5:
+                        await manager.send_to(ws, _alert_ws_payload("expired", alert))
+
+            # Send client-specific snapshot
+            snapshot_msg = {
+                "type": "snapshot",
+                "alerts": [_alert_to_dict(a) for a in active],
+                "count": len(active),
+                "updated_at": time.time(),
+                "cycle_status": "ok",
+                "location_source": loc_source,
+            }
+            await manager.send_to(ws, snapshot_msg)
+
+        except Exception as e:
+            logger.debug(f"Per-client broadcast failed: {e}")
+            dead.append(ws)
+
+    for ws in dead:
+        manager.disconnect(ws)
 
 
 async def run_alert_loop():
@@ -194,43 +242,20 @@ def stop_alert_loop():
     _running = False
 
 
-def _reproject_alert(alert_dict: dict, ref_lat: float, ref_lon: float) -> dict:
-    """Recompute distance/bearing/direction/ETA for an alert relative to a client location."""
-    d = dict(alert_dict)  # shallow copy
-    storm_lat = d.get("lat", 0)
-    storm_lon = d.get("lon", 0)
-    if storm_lat == 0 and storm_lon == 0:
-        return d
-
-    d["distance_mi"] = round(haversine_mi(ref_lat, ref_lon, storm_lat, storm_lon), 1)
-    bearing = compute_bearing(ref_lat, ref_lon, storm_lat, storm_lon)
-    d["bearing_deg"] = bearing
-    d["direction"] = bearing_to_direction(bearing)
-
-    speed = d.get("speed_mph", 0)
-    if speed > 0 and d["distance_mi"] > 0:
-        d["eta_min"] = round(d["distance_mi"] / speed * 60, 1)
-    else:
-        d["eta_min"] = None
-
-    return d
-
-
 def build_client_snapshot(ctx: ClientContext) -> dict:
-    """Build a snapshot payload reprojected to a client's location."""
-    base = _snapshot_ws_payload()
+    """Build a client-specific snapshot using client's own alert store."""
+    alert_store = ctx.get_alert_store()
+    active = alert_store.get_active_alerts()
+    loc_source = "client" if ctx.using_client_location else "default"
 
-    if ctx.using_client_location and ctx.lat is not None and ctx.lon is not None:
-        base["alerts"] = [
-            _reproject_alert(a, ctx.lat, ctx.lon) for a in base["alerts"]
-        ]
-        # Re-sort: severity desc, distance asc
-        base["alerts"].sort(key=lambda a: (-a.get("severity", 0), a.get("distance_mi", 9999)))
-        base["location_source"] = "client"
-    else:
-        base["location_source"] = "default"
-
-    return base
+    return {
+        "type": "snapshot",
+        "alerts": [_alert_to_dict(a) for a in active],
+        "count": len(active),
+        "updated_at": time.time(),
+        "cycle_status": "ok",
+        "location_source": loc_source,
+    }
 
 
 def _alert_to_dict(alert: StormAlert) -> dict:

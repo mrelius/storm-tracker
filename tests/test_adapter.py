@@ -8,8 +8,9 @@ import time
 import asyncio
 from unittest.mock import patch, AsyncMock, MagicMock
 from services.detection.adapter import (
-    build_storm_from_alert, fetch_severe_alerts,
-    run_detection_cycle, enrich_storms_cc, get_pipeline,
+    _build_candidate, _candidate_to_storm,
+    fetch_severe_alerts, run_detection_cycle,
+    _enrich_candidates_cc, get_pipeline,
     STORM_EVENTS, SEVERITY_DBZ_ESTIMATE,
 )
 from services.detection.models import StormObject, Trend, DetectionType
@@ -42,10 +43,18 @@ def _alert(event="Tornado Warning", severity="Extreme", polygon=_DEFAULT_POLYGON
     }
 
 
+def _build_storm(alert, ref_lat=39.5, ref_lon=-84.5):
+    """Helper: build candidate then convert to storm (replaces old build_storm_from_alert)."""
+    candidate = _build_candidate(alert)
+    if candidate is None:
+        return None
+    return _candidate_to_storm(candidate, ref_lat, ref_lon)
+
+
 class TestBuildStormFromAlert:
     def test_basic_conversion(self):
         alert = _alert()
-        storm = build_storm_from_alert(alert, ref_lat=39.5, ref_lon=-84.5)
+        storm = _build_storm(alert, ref_lat=39.5, ref_lon=-84.5)
         assert storm is not None
         assert isinstance(storm, StormObject)
         assert storm.lat != 0
@@ -55,63 +64,61 @@ class TestBuildStormFromAlert:
         assert storm.direction != ""
 
     def test_id_prefix(self):
-        storm = build_storm_from_alert(_alert(), 39.5, -84.5)
+        storm = _build_storm(_alert(), 39.5, -84.5)
         assert storm.id.startswith("nws_")
 
     def test_reflectivity_from_extreme(self):
-        storm = build_storm_from_alert(_alert(severity="Extreme"), 39.5, -84.5)
+        storm = _build_storm(_alert(severity="Extreme"), 39.5, -84.5)
         assert storm.reflectivity_dbz == 60.0
 
     def test_reflectivity_from_severe(self):
-        storm = build_storm_from_alert(_alert(severity="Severe"), 39.5, -84.5)
+        storm = _build_storm(_alert(severity="Severe"), 39.5, -84.5)
         assert storm.reflectivity_dbz == 50.0
 
     def test_reflectivity_unknown_severity(self):
-        storm = build_storm_from_alert(_alert(severity="Unknown"), 39.5, -84.5)
+        storm = _build_storm(_alert(severity="Unknown"), 39.5, -84.5)
         assert storm.reflectivity_dbz is None
 
     def test_no_polygon_returns_none(self):
         alert = _alert(polygon=None)
-        assert build_storm_from_alert(alert, 39.5, -84.5) is None
+        assert _build_storm(alert, 39.5, -84.5) is None
 
     def test_invalid_polygon_returns_none(self):
         alert = _alert(polygon="{bad}")
-        assert build_storm_from_alert(alert, 39.5, -84.5) is None
+        assert _build_storm(alert, 39.5, -84.5) is None
 
     def test_empty_polygon_returns_none(self):
         alert = _alert(polygon="")
-        assert build_storm_from_alert(alert, 39.5, -84.5) is None
+        assert _build_storm(alert, 39.5, -84.5) is None
 
     def test_velocity_delta_none_by_default(self):
-        storm = build_storm_from_alert(_alert(), 39.5, -84.5)
+        storm = _build_storm(_alert(), 39.5, -84.5)
         assert storm.velocity_delta is None
 
     def test_speed_defaults_to_zero(self):
-        storm = build_storm_from_alert(_alert(), 39.5, -84.5)
+        storm = _build_storm(_alert(), 39.5, -84.5)
         assert storm.speed_mph == 0.0
 
     def test_trend_defaults_to_unknown(self):
-        storm = build_storm_from_alert(_alert(), 39.5, -84.5)
+        storm = _build_storm(_alert(), 39.5, -84.5)
         assert storm.trend == Trend.unknown
 
     def test_close_distance(self):
         """Alert polygon centered near reference point should be short distance."""
-        storm = build_storm_from_alert(_alert(), ref_lat=39.55, ref_lon=-84.45)
+        storm = _build_storm(_alert(), ref_lat=39.55, ref_lon=-84.45)
         assert storm.distance_mi < 10
 
     def test_far_distance(self):
         """Alert polygon far from reference point."""
-        storm = build_storm_from_alert(_alert(), ref_lat=41.0, ref_lon=-81.0)
+        storm = _build_storm(_alert(), ref_lat=41.0, ref_lon=-81.0)
         assert storm.distance_mi > 100
 
 
 class TestEnrichCC:
     def test_enrichment_sets_cc(self):
+        from services.detection.adapter import BaseStormCandidate
         async def check():
-            storm = StormObject(
-                id="test", lat=39.55, lon=-84.45,
-                distance_mi=5, bearing_deg=180,
-            )
+            candidate = BaseStormCandidate(id="test", lat=39.55, lon=-84.45)
             mock_resp = MagicMock()
             mock_resp.status_code = 200
             mock_resp.json.return_value = {"cc_value": 0.92, "in_range": True}
@@ -123,17 +130,15 @@ class TestEnrichCC:
                 mock_instance.__aexit__ = AsyncMock(return_value=None)
                 mock_client.return_value = mock_instance
 
-                await enrich_storms_cc([storm])
-                assert storm.cc_min == 0.92
+                await _enrich_candidates_cc([candidate])
+                assert candidate.cc_min == 0.92
 
         run(check())
 
     def test_enrichment_failure_leaves_none(self):
+        from services.detection.adapter import BaseStormCandidate
         async def check():
-            storm = StormObject(
-                id="test", lat=39.55, lon=-84.45,
-                distance_mi=5, bearing_deg=180,
-            )
+            candidate = BaseStormCandidate(id="test", lat=39.55, lon=-84.45)
             with patch("services.detection.adapter.httpx.AsyncClient") as mock_client:
                 mock_instance = AsyncMock()
                 mock_instance.get.side_effect = Exception("timeout")
@@ -141,17 +146,16 @@ class TestEnrichCC:
                 mock_instance.__aexit__ = AsyncMock(return_value=None)
                 mock_client.return_value = mock_instance
 
-                await enrich_storms_cc([storm])
-                assert storm.cc_min is None
+                await _enrich_candidates_cc([candidate])
+                assert candidate.cc_min is None
 
         run(check())
 
     def test_low_cc_sets_velocity_proxy(self):
+        from services.detection.adapter import BaseStormCandidate
         async def check():
-            storm = StormObject(
-                id="test", lat=39.55, lon=-84.45,
-                distance_mi=5, bearing_deg=180,
-                reflectivity_dbz=60.0,
+            candidate = BaseStormCandidate(
+                id="test", lat=39.55, lon=-84.45, reflectivity_dbz=60.0,
             )
             mock_resp = MagicMock()
             mock_resp.status_code = 200
@@ -164,9 +168,9 @@ class TestEnrichCC:
                 mock_instance.__aexit__ = AsyncMock(return_value=None)
                 mock_client.return_value = mock_instance
 
-                await enrich_storms_cc([storm])
-                assert storm.cc_min == 0.70
-                assert storm.velocity_delta == 40.0
+                await _enrich_candidates_cc([candidate])
+                assert candidate.cc_min == 0.70
+                assert candidate.velocity_delta == 40.0
 
         run(check())
 
@@ -183,7 +187,7 @@ class TestEndToEnd:
 
             with patch("services.detection.adapter.fetch_severe_alerts",
                        new_callable=AsyncMock, return_value=[alert]):
-                with patch("services.detection.adapter.enrich_storms_cc",
+                with patch("services.detection.adapter._enrich_candidates_cc",
                            new_callable=AsyncMock):
                     result = await run_detection_cycle(ref_lat=39.55, ref_lon=-84.45)
 
@@ -213,7 +217,7 @@ class TestEndToEnd:
 
             with patch("services.detection.adapter.fetch_severe_alerts",
                        new_callable=AsyncMock, return_value=[alert]):
-                with patch("services.detection.adapter.enrich_storms_cc",
+                with patch("services.detection.adapter._enrich_candidates_cc",
                            new_callable=AsyncMock):
                     result = await run_detection_cycle()
 
@@ -230,7 +234,7 @@ class TestEndToEnd:
 
             with patch("services.detection.adapter.fetch_severe_alerts",
                        new_callable=AsyncMock, return_value=[alert]):
-                with patch("services.detection.adapter.enrich_storms_cc",
+                with patch("services.detection.adapter._enrich_candidates_cc",
                            new_callable=AsyncMock):
                     result = await run_detection_cycle(ref_lat=39.55, ref_lon=-84.45)
 

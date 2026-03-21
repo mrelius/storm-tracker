@@ -4,7 +4,7 @@ import time
 from unittest.mock import AsyncMock
 from services.detection.ws_manager import AlertWSManager, ClientContext, _valid_coords
 from services.detection.alert_service import (
-    _reproject_alert, build_client_snapshot, reset_service,
+    build_client_snapshot, reset_service,
 )
 from services.detection.alert_engine import create_alert_from_event, AlertStatus
 from services.detection.models import DetectionEvent, DetectionType
@@ -128,32 +128,6 @@ class TestClientContext:
             assert ctx.lon == -81.0
         run(check())
 
-
-class TestReprojectAlert:
-    def test_reproject_changes_distance(self):
-        alert = {"lat": 39.5, "lon": -84.5, "distance_mi": 100, "bearing_deg": 0,
-                 "direction": "N", "speed_mph": 0, "eta_min": None, "severity": 2}
-        # Same point → distance ~0
-        result = _reproject_alert(alert, 39.5, -84.5)
-        assert result["distance_mi"] < 1
-
-    def test_reproject_computes_bearing(self):
-        alert = {"lat": 40.0, "lon": -84.5, "distance_mi": 0, "bearing_deg": 0,
-                 "direction": "?", "speed_mph": 0, "eta_min": None, "severity": 2}
-        result = _reproject_alert(alert, 39.0, -84.5)
-        assert 355 < result["bearing_deg"] or result["bearing_deg"] < 5  # ~north
-
-    def test_reproject_computes_direction(self):
-        alert = {"lat": 39.0, "lon": -83.0, "distance_mi": 0, "bearing_deg": 0,
-                 "direction": "?", "speed_mph": 0, "eta_min": None, "severity": 2}
-        result = _reproject_alert(alert, 39.0, -84.0)
-        assert result["direction"] == "E"
-
-    def test_reproject_zero_lat_lon_untouched(self):
-        alert = {"lat": 0, "lon": 0, "distance_mi": 50, "bearing_deg": 90,
-                 "direction": "E", "speed_mph": 0, "eta_min": None, "severity": 2}
-        result = _reproject_alert(alert, 39.5, -84.5)
-        assert result["distance_mi"] == 50  # unchanged
 
 
 class TestBuildClientSnapshot:

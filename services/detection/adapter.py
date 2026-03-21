@@ -1,20 +1,25 @@
 """Detection adapter — converts live project data into StormObjects.
 
+Architecture (Phase 10):
+- Global phase: fetch NWS alerts → extract centroids → enrich CC → BaseStormCandidates
+- Per-client phase: base candidates + client lat/lon → StormObjects → detection pipeline
+
 Storm source strategy:
 1. NWS severe alerts from SQLite as storm anchors
 2. Polygon centroid as provisional storm position
 3. CC sampling from LXC 121 (via proxy) for enrichment
-4. Distance/bearing computed from user reference location
 
 Documented data gaps:
 - reflectivity_dbz: estimated from NWS severity metadata (not measured)
 - velocity_delta: None unless CC is very low (proxy heuristic)
 - speed_mph: NWS alerts don't include motion vectors; defaults to 0
-- trend: defaults to Trend.unknown; future: derive from alert timing
+- trend: defaults to Trend.unknown; no temporal context from single snapshot
 """
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Optional
 
 import httpx
 
@@ -35,15 +40,139 @@ STORM_EVENTS = {
     "Tornado Watch",
 }
 
-# Reflectivity estimates from NWS severity metadata (documented approximation)
-# NWS doesn't include dBZ in alerts; these are conservative proxies
+# Reflectivity estimates from NWS severity metadata
 SEVERITY_DBZ_ESTIMATE = {
     "Extreme": 60.0,
     "Severe": 50.0,
     "Moderate": 40.0,
 }
 
-# Singleton pipeline instance (stateful — owns cooldown state)
+
+@dataclass
+class BaseStormCandidate:
+    """Shared storm data — position + metadata. No client-relative fields.
+
+    Produced once per background cycle. Evaluated per-client to create StormObjects.
+    """
+    id: str
+    lat: float
+    lon: float
+    reflectivity_dbz: Optional[float] = None
+    velocity_delta: Optional[float] = None
+    cc_min: Optional[float] = None
+    nws_event: str = ""
+    nws_severity: str = ""
+    last_updated: float = 0.0
+
+
+# Shared base storm candidates — updated by background cycle
+_base_candidates: list[BaseStormCandidate] = []
+
+
+def get_base_candidates() -> list[BaseStormCandidate]:
+    return list(_base_candidates)
+
+
+async def refresh_base_candidates():
+    """Global phase: fetch NWS alerts, extract centroids, enrich CC.
+
+    Produces shared BaseStormCandidates consumed by per-client evaluation.
+    """
+    global _base_candidates
+
+    alerts = await fetch_severe_alerts()
+    if not alerts:
+        _base_candidates = []
+        return
+
+    candidates = []
+    for alert in alerts:
+        candidate = _build_candidate(alert)
+        if candidate:
+            candidates.append(candidate)
+
+    if candidates:
+        await _enrich_candidates_cc(candidates)
+
+    _base_candidates = candidates
+    logger.debug(f"Base candidates refreshed: {len(candidates)}")
+
+
+def evaluate_for_client(
+    ref_lat: float, ref_lon: float,
+    pipeline: DetectionPipeline,
+) -> DetectionResult:
+    """Per-client phase: build StormObjects from shared candidates relative to
+    client location, run through the provided detection pipeline.
+
+    Each client should pass their own pipeline instance for independent cooldown state.
+    """
+    candidates = get_base_candidates()
+    if not candidates:
+        return DetectionResult(storms_processed=0)
+
+    storms = []
+    for c in candidates:
+        storm = _candidate_to_storm(c, ref_lat, ref_lon)
+        storms.append(storm)
+
+    return pipeline.process(storms)
+
+
+def _build_candidate(alert: dict) -> BaseStormCandidate | None:
+    """Extract a base candidate from an NWS alert."""
+    polygon = alert.get("polygon")
+    centroid = extract_centroid(polygon)
+    if not centroid:
+        return None
+
+    storm_lat, storm_lon = centroid
+    nws_severity = alert.get("severity", "Unknown")
+    dbz_estimate = SEVERITY_DBZ_ESTIMATE.get(nws_severity)
+
+    alert_id = alert.get("id", "unknown")
+    short_id = alert_id.split(".")[-1] if "." in alert_id else alert_id[-8:]
+
+    return BaseStormCandidate(
+        id=f"nws_{short_id}",
+        lat=storm_lat,
+        lon=storm_lon,
+        reflectivity_dbz=dbz_estimate,
+        velocity_delta=None,
+        cc_min=None,
+        nws_event=alert.get("event", ""),
+        nws_severity=nws_severity,
+        last_updated=time.time(),
+    )
+
+
+def _candidate_to_storm(
+    c: BaseStormCandidate, ref_lat: float, ref_lon: float,
+) -> StormObject:
+    """Convert a base candidate to a client-relative StormObject."""
+    distance = haversine_mi(ref_lat, ref_lon, c.lat, c.lon)
+    bearing = compute_bearing(ref_lat, ref_lon, c.lat, c.lon)
+    direction = bearing_to_direction(bearing)
+
+    return StormObject(
+        id=c.id,
+        lat=c.lat,
+        lon=c.lon,
+        distance_mi=round(distance, 1),
+        bearing_deg=bearing,
+        direction=direction,
+        speed_mph=0.0,
+        reflectivity_dbz=c.reflectivity_dbz,
+        velocity_delta=c.velocity_delta,
+        cc_min=c.cc_min,
+        trend=Trend.unknown,
+        last_updated=c.last_updated,
+    )
+
+
+# --- Legacy compatibility ---
+
+# Singleton pipeline for default/HTTP path
 _pipeline: DetectionPipeline | None = None
 
 
@@ -58,54 +187,25 @@ async def run_detection_cycle(
     ref_lat: float | None = None,
     ref_lon: float | None = None,
 ) -> DetectionResult:
-    """Full detection cycle: fetch alerts → build storms → detect.
+    """Legacy: full detection cycle for HTTP endpoint / default path.
 
-    Args:
-        ref_lat/ref_lon: user reference point. Falls back to config default.
-
-    Returns:
-        DetectionResult with emitted events.
+    Uses shared base candidates + provided or default location.
     """
     settings = get_settings()
     lat = ref_lat if ref_lat is not None else settings.default_lat
     lon = ref_lon if ref_lon is not None else settings.default_lon
 
-    # 1. Fetch severe alerts from DB
-    alerts = await fetch_severe_alerts()
-    if not alerts:
-        return DetectionResult(storms_processed=0)
+    # Ensure base candidates are fresh
+    await refresh_base_candidates()
 
-    # 2. Build StormObjects
-    storms = []
-    for alert in alerts:
-        storm = build_storm_from_alert(alert, lat, lon)
-        if storm:
-            storms.append(storm)
-
-    if not storms:
-        return DetectionResult(storms_processed=0)
-
-    # 3. Enrich with CC sampling (best-effort, non-blocking)
-    await enrich_storms_cc(storms)
-
-    # 4. Run detection pipeline
     pipeline = get_pipeline()
-    result = pipeline.process(storms)
+    return evaluate_for_client(lat, lon, pipeline)
 
-    if result.events:
-        logger.info(
-            f"Detection cycle: {len(alerts)} alerts → {len(storms)} storms → "
-            f"{len(result.events)} detections ({result.detections_suppressed} suppressed)"
-        )
 
-    return result
-
+# --- Shared helpers ---
 
 async def fetch_severe_alerts() -> list[dict]:
-    """Fetch active severe alerts from SQLite.
-
-    Returns list of dicts with: id, event, severity, polygon, onset, expires, issued.
-    """
+    """Fetch active severe alerts from SQLite."""
     now = datetime.now(timezone.utc).isoformat()
     db = await get_connection()
     try:
@@ -128,74 +228,23 @@ async def fetch_severe_alerts() -> list[dict]:
         await db.close()
 
 
-def build_storm_from_alert(
-    alert: dict, ref_lat: float, ref_lon: float,
-) -> StormObject | None:
-    """Convert an NWS alert dict into a StormObject.
-
-    Returns None if centroid cannot be extracted.
-    """
-    polygon = alert.get("polygon")
-    centroid = extract_centroid(polygon)
-
-    if not centroid:
-        return None
-
-    storm_lat, storm_lon = centroid
-    distance = haversine_mi(ref_lat, ref_lon, storm_lat, storm_lon)
-    bearing = compute_bearing(ref_lat, ref_lon, storm_lat, storm_lon)
-    direction = bearing_to_direction(bearing)
-
-    # Reflectivity estimate from NWS severity
-    nws_severity = alert.get("severity", "Unknown")
-    dbz_estimate = SEVERITY_DBZ_ESTIMATE.get(nws_severity)
-
-    # Create a stable short ID from the NWS alert ID
-    alert_id = alert.get("id", "unknown")
-    short_id = alert_id.split(".")[-1] if "." in alert_id else alert_id[-8:]
-
-    return StormObject(
-        id=f"nws_{short_id}",
-        lat=storm_lat,
-        lon=storm_lon,
-        distance_mi=round(distance, 1),
-        bearing_deg=bearing,
-        direction=direction,
-        speed_mph=0.0,        # NWS alerts don't include motion vectors
-        reflectivity_dbz=dbz_estimate,
-        velocity_delta=None,  # not available from NWS alerts
-        cc_min=None,          # populated by enrichment step
-        trend=Trend.unknown,  # no temporal context from single snapshot
-        last_updated=time.time(),
-    )
-
-
-async def enrich_storms_cc(storms: list[StormObject]):
-    """Enrich storm objects with CC values from radar sampling.
-
-    Best-effort: failure leaves cc_min as None (detectors handle gracefully).
-    Uses the proxy endpoint on LXC 119 (no direct LXC 121 access).
-    Timeout 2s per storm. Skips storms outside radar range.
-    """
-    for storm in storms:
+async def _enrich_candidates_cc(candidates: list[BaseStormCandidate]):
+    """Enrich base candidates with CC values from radar sampling."""
+    for c in candidates:
         try:
             async with httpx.AsyncClient(timeout=2) as client:
                 resp = await client.get(
-                    f"http://localhost:8119/proxy/cc-sample",
-                    params={"lat": storm.lat, "lon": storm.lon},
+                    "http://localhost:8119/proxy/cc-sample",
+                    params={"lat": c.lat, "lon": c.lon},
                 )
                 if resp.status_code == 200:
                     data = resp.json()
                     cc_val = data.get("cc_value")
                     if cc_val is not None:
-                        storm.cc_min = round(max(0, min(1, cc_val)), 4)
-
-                        # Heuristic: very low CC with high reflectivity suggests rotation
-                        # This is a documented proxy — not a measured velocity delta
-                        if (storm.cc_min < 0.75
-                                and storm.reflectivity_dbz is not None
-                                and storm.reflectivity_dbz >= 50):
-                            storm.velocity_delta = 40.0  # proxy estimate
+                        c.cc_min = round(max(0, min(1, cc_val)), 4)
+                        if (c.cc_min < 0.75
+                                and c.reflectivity_dbz is not None
+                                and c.reflectivity_dbz >= 50):
+                            c.velocity_delta = 40.0
         except Exception as e:
-            logger.debug(f"CC enrichment failed for {storm.id}: {e}")
-            # Leave cc_min as None — detectors handle this
+            logger.debug(f"CC enrichment failed for {c.id}: {e}")
