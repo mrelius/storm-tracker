@@ -87,7 +87,7 @@ class NexradCCProvider(RadarProvider):
             overlay_eligible=rules.get("overlay_eligible", True),
             requires_advanced=rules.get("requires_advanced", False),
             min_zoom=4,
-            max_zoom=8,
+            max_zoom=10,
         )]
 
     async def get_latest_frame(self, product_id: str) -> RadarLayerInfo | None:
