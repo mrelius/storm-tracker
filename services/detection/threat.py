@@ -62,16 +62,9 @@ def compute_threat_score(alert: dict) -> float:
         eta_bonus = max(0, min(60, 30 - eta)) * 2  # <30 min = bonus, max 60 pts
         prox = min(100, prox + eta_bonus)
 
-    # Trend score
-    # Note: trend info may not be directly on the alert dict yet,
-    # but direction + speed can indicate approach
-    speed = alert.get("speed_mph", 0)
-    if eta is not None and eta > 0:
-        trend_val = TREND_SCORES["closing"]
-    elif speed > 0:
-        trend_val = TREND_SCORES.get("unknown", 30)
-    else:
-        trend_val = TREND_SCORES.get("unknown", 30)
+    # Trend score — uses explicit trend field (no proxy inference)
+    trend = alert.get("trend", "unknown")
+    trend_val = TREND_SCORES.get(trend, TREND_SCORES["unknown"])
 
     # Confidence (0-1 → 0-100)
     confidence = alert.get("confidence", 0.5)

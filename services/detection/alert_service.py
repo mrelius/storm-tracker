@@ -271,22 +271,40 @@ def build_client_snapshot(ctx: ClientContext) -> dict:
 
 
 def _alert_to_dict(alert: StormAlert) -> dict:
+    """Canonical alert serialization — all fields explicit, no inference downstream."""
+    now = time.time()
     return {
+        # Identity
         "alert_id": alert.alert_id,
         "storm_id": alert.storm_id,
         "type": alert.type,
         "severity": alert.severity,
-        "confidence": alert.confidence,
+        # Content
         "title": alert.title,
         "message": alert.message,
         "status": alert.status.value if hasattr(alert.status, "value") else alert.status,
-        "distance_mi": alert.distance_mi,
-        "direction": alert.direction,
-        "bearing_deg": alert.bearing_deg,
-        "eta_min": alert.eta_min,
+        # Timestamps
+        "created_at": alert.created_at,
+        "updated_at": alert.updated_at,
+        "expires_at": alert.expires_at,
+        "freshness": round(now - alert.updated_at, 1),
+        # Location
         "lat": alert.lat,
         "lon": alert.lon,
+        "distance_mi": alert.distance_mi,
+        "bearing_deg": alert.bearing_deg,
+        "direction": alert.direction,
+        # Motion
+        "trend": alert.trend,
         "speed_mph": alert.speed_mph,
+        "heading_deg": alert.heading_deg,
+        # Timing
+        "eta_min": alert.eta_min,
+        # Confidence
+        "confidence": alert.confidence,
+        "track_confidence": alert.track_confidence,
+        "motion_confidence": alert.motion_confidence,
+        "trend_confidence": alert.trend_confidence,
     }
 
 

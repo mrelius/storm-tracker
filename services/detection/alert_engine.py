@@ -58,25 +58,62 @@ ALERT_TEMPLATES = {
 
 @dataclass
 class StormAlert:
-    """User-facing alert object with lifecycle state."""
+    """Canonical alert object — single authoritative structure for all consumers.
+
+    All fields are explicit. No downstream inference needed.
+    """
+    # Identity
     alert_id: str
     storm_id: str
-    type: str
-    severity: int
-    confidence: float
+    type: str               # storm_proximity, strong_storm, rotation, debris_signature
+    severity: int            # 1-4
+
+    # Content
     title: str
     message: str
-    status: AlertStatus
-    created_at: float       # epoch seconds
-    updated_at: float       # epoch seconds
-    expires_at: float       # epoch seconds
-    distance_mi: float
-    direction: str
-    bearing_deg: float
-    eta_min: Optional[float] = None
+    status: AlertStatus      # new, active, escalated, expired
+
+    # Timestamps
+    created_at: float
+    updated_at: float
+    expires_at: float
+
+    # Location (client-relative)
     lat: float = 0.0
     lon: float = 0.0
+    distance_mi: float = 0.0
+    bearing_deg: float = 0.0
+    direction: str = "unknown"
+
+    # Motion (from tracker)
+    trend: str = "unknown"        # closing, departing, unknown
     speed_mph: float = 0.0
+    heading_deg: float = 0.0      # storm travel direction
+
+    # Timing
+    eta_min: Optional[float] = None
+
+    # Confidence (explicit, no inference)
+    confidence: float = 0.0       # detection confidence
+    track_confidence: float = 0.0
+    motion_confidence: float = 0.0
+    trend_confidence: float = 0.0
+
+
+def _update_alert_fields(alert: StormAlert, event: DetectionEvent):
+    """Update an existing alert's location/motion/confidence fields from a detection event."""
+    alert.lat = event.lat
+    alert.lon = event.lon
+    alert.distance_mi = event.distance_mi
+    alert.bearing_deg = event.bearing_deg
+    alert.direction = event.direction
+    alert.trend = event.trend
+    alert.speed_mph = event.speed_mph
+    alert.heading_deg = event.heading_deg
+    alert.eta_min = event.eta_min
+    alert.track_confidence = event.track_confidence
+    alert.motion_confidence = event.motion_confidence
+    alert.trend_confidence = event.trend_confidence
 
 
 def _alert_key(storm_id: str, detection_type: str) -> str:
@@ -129,20 +166,25 @@ def create_alert_from_event(event: DetectionEvent) -> StormAlert:
         storm_id=event.storm_id,
         type=event.type.value,
         severity=event.severity,
-        confidence=event.confidence,
         title=template["title"],
         message=format_message(event),
         status=AlertStatus.new,
         created_at=now,
         updated_at=now,
         expires_at=now + ttl,
-        distance_mi=event.distance_mi,
-        direction=event.direction,
-        bearing_deg=event.bearing_deg,
-        eta_min=event.eta_min,
         lat=event.lat,
         lon=event.lon,
+        distance_mi=event.distance_mi,
+        bearing_deg=event.bearing_deg,
+        direction=event.direction,
+        trend=event.trend,
         speed_mph=event.speed_mph,
+        heading_deg=event.heading_deg,
+        eta_min=event.eta_min,
+        confidence=event.confidence,
+        track_confidence=event.track_confidence,
+        motion_confidence=event.motion_confidence,
+        trend_confidence=event.trend_confidence,
     )
 
 
@@ -179,16 +221,11 @@ class AlertStore:
                 now = time.time()
                 ttl = ALERT_TTL.get(event.severity, DEFAULT_TTL)
                 existing.severity = event.severity
-                existing.confidence = event.confidence
                 existing.status = AlertStatus.escalated
                 existing.updated_at = now
                 existing.expires_at = now + ttl
                 existing.message = format_message(event)
-                existing.distance_mi = event.distance_mi
-                existing.direction = event.direction
-                existing.eta_min = event.eta_min
-                existing.lat = event.lat
-                existing.lon = event.lon
+                _update_alert_fields(existing, event)
                 changed.append(existing)
 
             else:
@@ -200,12 +237,8 @@ class AlertStore:
                 existing.updated_at = now
                 existing.expires_at = now + ttl
                 existing.confidence = max(existing.confidence, event.confidence)
-                existing.distance_mi = event.distance_mi
-                existing.direction = event.direction
-                existing.eta_min = event.eta_min
                 existing.message = format_message(event)
-                existing.lat = event.lat
-                existing.lon = event.lon
+                _update_alert_fields(existing, event)
 
         return changed
 

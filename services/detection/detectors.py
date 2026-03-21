@@ -10,6 +10,26 @@ from services.detection.models import (
 from services.detection.eta import compute_eta
 
 
+def _common_fields(storm: StormObject) -> dict:
+    """Extract common signal fields from StormObject for DetectionEvent."""
+    return dict(
+        storm_id=storm.id,
+        distance_mi=storm.distance_mi,
+        direction=storm.direction,
+        bearing_deg=storm.bearing_deg,
+        eta_min=compute_eta(storm),
+        timestamp=time.time(),
+        lat=storm.lat,
+        lon=storm.lon,
+        speed_mph=storm.speed_mph,
+        heading_deg=getattr(storm, "bearing_deg", 0),
+        trend=storm.trend.value if hasattr(storm.trend, "value") else str(storm.trend),
+        track_confidence=storm.track_confidence,
+        motion_confidence=storm.motion_confidence,
+        trend_confidence=storm.trend_confidence,
+    )
+
+
 MIN_TREND_CONFIDENCE = 0.15  # below this, suppress proximity detection
 
 
@@ -34,22 +54,12 @@ def detect_proximity(storm: StormObject) -> list[DetectionEvent]:
     base_conf = dist_factor * 0.5 + speed_factor * 0.2 + storm.trend_confidence * 0.3
     confidence = round(min(1.0, base_conf), 2)
 
-    eta = compute_eta(storm)
-
     return [DetectionEvent(
         type=DetectionType.storm_proximity,
         severity=severity,
         confidence=confidence,
-        storm_id=storm.id,
-        distance_mi=storm.distance_mi,
-        direction=storm.direction,
-        bearing_deg=storm.bearing_deg,
-        eta_min=eta,
-        timestamp=time.time(),
-        lat=storm.lat,
-        lon=storm.lon,
-        speed_mph=storm.speed_mph,
         detail=f"Storm {storm.distance_mi:.1f} mi {storm.direction}, closing at {storm.speed_mph:.0f} mph",
+        **_common_fields(storm),
     )]
 
 
@@ -66,22 +76,12 @@ def detect_strong_storm(storm: StormObject) -> list[DetectionEvent]:
     # Confidence scales with intensity above threshold
     confidence = round(min(1.0, 0.6 + (storm.reflectivity_dbz - 55) * 0.04), 2)
 
-    eta = compute_eta(storm)
-
     return [DetectionEvent(
         type=DetectionType.strong_storm,
         severity=2,
         confidence=confidence,
-        storm_id=storm.id,
-        distance_mi=storm.distance_mi,
-        direction=storm.direction,
-        bearing_deg=storm.bearing_deg,
-        eta_min=eta,
-        timestamp=time.time(),
-        lat=storm.lat,
-        lon=storm.lon,
-        speed_mph=storm.speed_mph,
         detail=f"Strong storm: {storm.reflectivity_dbz:.0f} dBZ, {storm.distance_mi:.1f} mi {storm.direction}",
+        **_common_fields(storm),
     )]
 
 
@@ -97,25 +97,14 @@ def detect_rotation(storm: StormObject) -> list[DetectionEvent]:
 
     severity = 3 if storm.velocity_delta >= 50 else 2
 
-    # Confidence scales with shear magnitude
     confidence = round(min(1.0, 0.5 + (storm.velocity_delta - 35) * 0.025), 2)
-
-    eta = compute_eta(storm)
 
     return [DetectionEvent(
         type=DetectionType.rotation,
         severity=severity,
         confidence=confidence,
-        storm_id=storm.id,
-        distance_mi=storm.distance_mi,
-        direction=storm.direction,
-        bearing_deg=storm.bearing_deg,
-        eta_min=eta,
-        timestamp=time.time(),
-        lat=storm.lat,
-        lon=storm.lon,
-        speed_mph=storm.speed_mph,
         detail=f"Rotation detected: {storm.velocity_delta:.0f} kt shear, {storm.distance_mi:.1f} mi {storm.direction}",
+        **_common_fields(storm),
     )]
 
 
@@ -138,30 +127,19 @@ def detect_debris_signature(storm: StormObject) -> list[DetectionEvent]:
     if storm.velocity_delta <= 35:
         return []
 
-    # Confidence: lower CC = higher confidence
-    cc_factor = max(0, 1.0 - storm.cc_min) * 1.5  # 0.74 → 0.39
+    cc_factor = max(0, 1.0 - storm.cc_min) * 1.5
     vel_factor = min(1.0, storm.velocity_delta / 60.0)
     confidence = round(min(1.0, cc_factor * 0.5 + vel_factor * 0.5), 2)
-
-    eta = compute_eta(storm)
 
     return [DetectionEvent(
         type=DetectionType.debris_signature,
         severity=4,
         confidence=confidence,
-        storm_id=storm.id,
-        distance_mi=storm.distance_mi,
-        direction=storm.direction,
-        bearing_deg=storm.bearing_deg,
-        eta_min=eta,
-        timestamp=time.time(),
-        lat=storm.lat,
-        lon=storm.lon,
-        speed_mph=storm.speed_mph,
         detail=(f"DEBRIS SIGNATURE: CC={storm.cc_min:.2f}, "
                 f"{storm.velocity_delta:.0f} kt shear, "
                 f"{storm.reflectivity_dbz:.0f} dBZ, "
                 f"{storm.distance_mi:.1f} mi {storm.direction}"),
+        **_common_fields(storm),
     )]
 
 

@@ -59,12 +59,17 @@ class DetectionEvent:
     distance_mi: float
     direction: str
     bearing_deg: float
-    eta_min: Optional[float] = None  # estimated time of arrival in minutes
-    timestamp: float = 0.0           # epoch seconds when detection was created
+    eta_min: Optional[float] = None
+    timestamp: float = 0.0
     lat: float = 0.0
     lon: float = 0.0
     speed_mph: float = 0.0
-    detail: str = ""                 # human-readable detail string
+    heading_deg: float = 0.0
+    trend: str = "unknown"
+    track_confidence: float = 0.0
+    motion_confidence: float = 0.0
+    trend_confidence: float = 0.0
+    detail: str = ""
 
 
 @dataclass
