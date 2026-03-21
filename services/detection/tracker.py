@@ -20,13 +20,18 @@ TREND_THRESHOLD_MI = 0.5   # distance change below this = no trend
 
 @dataclass
 class StormTrack:
-    """A tracked storm with position history and motion vector."""
+    """A tracked storm with position history, motion vector, and confidence."""
     storm_id: str
     positions: list[tuple[float, float, float]] = field(default_factory=list)
-    # (lat, lon, epoch_seconds)
     speed_mph: float = 0.0
-    heading_deg: float = 0.0    # direction of travel (0=N, 90=E, etc.)
+    heading_deg: float = 0.0
     missed_cycles: int = 0
+    total_cycles: int = 0          # how many cycles this track has been alive
+    recent_speeds: list[float] = field(default_factory=list)   # last N speeds
+    recent_headings: list[float] = field(default_factory=list) # last N headings
+    track_confidence: float = 0.0  # overall track quality (0-1)
+    motion_confidence: float = 0.0 # speed/heading stability (0-1)
+    smoothed_speed: float = 0.0    # moving average of recent speeds
     reflectivity_dbz: float | None = None
     velocity_delta: float | None = None
     cc_min: float | None = None
@@ -146,11 +151,17 @@ class StormTracker:
         self._next_id = 1
 
 
+MAX_RECENT = 3  # how many recent speeds/headings to keep
+
+
 def _compute_motion(track: StormTrack):
-    """Compute speed and heading from the last two positions."""
+    """Compute speed, heading, smoothed speed, and confidence from position history."""
+    track.total_cycles += 1
+
     if len(track.positions) < 2:
         track.speed_mph = 0.0
         track.heading_deg = 0.0
+        _compute_confidence(track)
         return
 
     lat1, lon1, t1 = track.positions[-2]
@@ -160,46 +171,125 @@ def _compute_motion(track: StormTrack):
     if dt_hours <= 0:
         track.speed_mph = 0.0
         track.heading_deg = 0.0
+        _compute_confidence(track)
         return
 
     dist = haversine_mi(lat1, lon1, lat2, lon2)
     speed = dist / dt_hours
 
-    # Guard against unrealistic speed
     if speed > MAX_SPEED_MPH:
         track.speed_mph = 0.0
         track.heading_deg = 0.0
+        _compute_confidence(track)
         return
 
     if speed < MIN_SPEED_MPH:
         track.speed_mph = 0.0
-        # Keep previous heading if any
+        _compute_confidence(track)
         return
 
+    heading = compute_bearing(lat1, lon1, lat2, lon2)
+
     track.speed_mph = round(speed, 1)
-    track.heading_deg = compute_bearing(lat1, lon1, lat2, lon2)
+    track.heading_deg = heading
+
+    # Record recent values for smoothing/stability
+    track.recent_speeds.append(speed)
+    if len(track.recent_speeds) > MAX_RECENT:
+        track.recent_speeds = track.recent_speeds[-MAX_RECENT:]
+
+    track.recent_headings.append(heading)
+    if len(track.recent_headings) > MAX_RECENT:
+        track.recent_headings = track.recent_headings[-MAX_RECENT:]
+
+    # Smoothed speed: simple average of recent
+    track.smoothed_speed = round(sum(track.recent_speeds) / len(track.recent_speeds), 1)
+
+    _compute_confidence(track)
+
+
+def _compute_confidence(track: StormTrack):
+    """Compute track_confidence and motion_confidence from track state.
+
+    Rules (deterministic, explainable):
+    - track_confidence: based on age, continuity, position count
+    - motion_confidence: based on speed/heading stability across recent history
+    """
+    # --- Track confidence ---
+    n_pos = len(track.positions)
+    age_factor = min(1.0, n_pos / 4.0)  # 1 pos=0.25, 2=0.5, 3=0.75, 4+=1.0
+
+    # Continuity penalty: missed cycles reduce confidence
+    continuity = max(0.0, 1.0 - track.missed_cycles * 0.3)
+
+    track.track_confidence = round(age_factor * continuity, 2)
+
+    # --- Motion confidence ---
+    if len(track.recent_speeds) < 2:
+        track.motion_confidence = round(track.track_confidence * 0.5, 2)
+        return
+
+    # Speed stability: coefficient of variation (std/mean)
+    speeds = track.recent_speeds
+    mean_speed = sum(speeds) / len(speeds)
+    if mean_speed > 0:
+        variance = sum((s - mean_speed) ** 2 for s in speeds) / len(speeds)
+        cv = (variance ** 0.5) / mean_speed
+        speed_stability = max(0.0, 1.0 - cv)  # cv=0 → perfect, cv>1 → terrible
+    else:
+        speed_stability = 0.5
+
+    # Heading stability: max angular difference between consecutive headings
+    headings = track.recent_headings
+    heading_diffs = []
+    for i in range(1, len(headings)):
+        diff = abs(headings[i] - headings[i - 1])
+        if diff > 180:
+            diff = 360 - diff
+        heading_diffs.append(diff)
+
+    if heading_diffs:
+        max_diff = max(heading_diffs)
+        # <20° = high stability, >45° = low
+        heading_stability = max(0.0, 1.0 - max_diff / 60.0)
+    else:
+        heading_stability = 0.5
+
+    track.motion_confidence = round(
+        track.track_confidence * (speed_stability * 0.5 + heading_stability * 0.5), 2
+    )
 
 
 def compute_trend(
     track: StormTrack,
     ref_lat: float, ref_lon: float,
-) -> str:
-    """Compute client-relative trend: closing, departing, or unknown.
+) -> tuple[str, float]:
+    """Compute client-relative trend and trend confidence.
+
+    Returns (trend_str, confidence):
+    - trend: "closing", "departing", or "unknown"
+    - confidence: 0.0-1.0 based on magnitude of change + motion confidence
 
     Compares distance from client to storm's previous vs current position.
     """
     if track.prev_lat is None or track.prev_lon is None:
-        return "unknown"
+        return ("unknown", 0.0)
 
     prev_dist = haversine_mi(ref_lat, ref_lon, track.prev_lat, track.prev_lon)
     curr_dist = haversine_mi(ref_lat, ref_lon, track.lat, track.lon)
     delta = curr_dist - prev_dist
 
+    if abs(delta) < TREND_THRESHOLD_MI:
+        return ("unknown", 0.0)
+
+    # Trend confidence = motion_confidence × magnitude factor
+    magnitude = min(1.0, abs(delta) / 5.0)  # 5 mi change = full magnitude
+    trend_conf = round(track.motion_confidence * magnitude, 2)
+
     if delta < -TREND_THRESHOLD_MI:
-        return "closing"
-    elif delta > TREND_THRESHOLD_MI:
-        return "departing"
-    return "unknown"
+        return ("closing", trend_conf)
+    else:
+        return ("departing", trend_conf)
 
 
 # Singleton tracker

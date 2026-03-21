@@ -10,22 +10,29 @@ from services.detection.models import (
 from services.detection.eta import compute_eta
 
 
+MIN_TREND_CONFIDENCE = 0.15  # below this, suppress proximity detection
+
+
 def detect_proximity(storm: StormObject) -> list[DetectionEvent]:
-    """Trigger when storm is within 20 miles and closing.
+    """Trigger when storm is within 20 miles and closing with sufficient confidence.
 
     Severity 2 if < 10 miles, severity 1 if 10-20 miles.
+    Suppressed when trend confidence is too low (noisy/new track).
     """
     if storm.distance_mi >= 20:
         return []
     if storm.trend != Trend.closing:
         return []
+    if storm.trend_confidence < MIN_TREND_CONFIDENCE:
+        return []
 
     severity = 2 if storm.distance_mi < 10 else 1
 
-    # Confidence based on how close and how fast
+    # Confidence incorporates track quality + distance + speed
     dist_factor = max(0, 1.0 - storm.distance_mi / 20.0)
     speed_factor = min(1.0, storm.speed_mph / 50.0) if storm.speed_mph > 0 else 0.3
-    confidence = round(min(1.0, dist_factor * 0.7 + speed_factor * 0.3), 2)
+    base_conf = dist_factor * 0.5 + speed_factor * 0.2 + storm.trend_confidence * 0.3
+    confidence = round(min(1.0, base_conf), 2)
 
     eta = compute_eta(storm)
 

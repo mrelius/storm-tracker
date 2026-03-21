@@ -163,12 +163,15 @@ def _build_candidate(alert: dict) -> BaseStormCandidate | None:
 def _track_to_storm(
     track: StormTrack, ref_lat: float, ref_lon: float,
 ) -> StormObject:
-    """Convert a tracked storm to a client-relative StormObject with motion data."""
+    """Convert a tracked storm to a client-relative StormObject with motion + confidence."""
     distance = haversine_mi(ref_lat, ref_lon, track.lat, track.lon)
     bearing = compute_bearing(ref_lat, ref_lon, track.lat, track.lon)
     direction = bearing_to_direction(bearing)
-    trend_str = compute_trend(track, ref_lat, ref_lon)
+    trend_str, trend_conf = compute_trend(track, ref_lat, ref_lon)
     trend = Trend(trend_str) if trend_str in Trend.__members__ else Trend.unknown
+
+    # Use smoothed speed when available for more stable ETA
+    speed = track.smoothed_speed if track.smoothed_speed > 0 else track.speed_mph
 
     return StormObject(
         id=track.storm_id,
@@ -177,11 +180,14 @@ def _track_to_storm(
         distance_mi=round(distance, 1),
         bearing_deg=bearing,
         direction=direction,
-        speed_mph=track.speed_mph,
+        speed_mph=speed,
         reflectivity_dbz=track.reflectivity_dbz,
         velocity_delta=track.velocity_delta,
         cc_min=track.cc_min,
         trend=trend,
+        track_confidence=track.track_confidence,
+        motion_confidence=track.motion_confidence,
+        trend_confidence=trend_conf,
         last_updated=track.last_updated,
     )
 

@@ -40,7 +40,10 @@ class StormObject:
     velocity_delta: Optional[float] = None
     cc_min: Optional[float] = None
     trend: Trend = Trend.unknown
-    last_updated: float = 0.0  # epoch seconds
+    track_confidence: float = 0.0      # overall track quality (0-1)
+    motion_confidence: float = 0.0     # speed/heading stability (0-1)
+    trend_confidence: float = 0.0      # trend reliability (0-1)
+    last_updated: float = 0.0          # epoch seconds
 
 
 @dataclass

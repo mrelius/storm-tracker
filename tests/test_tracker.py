@@ -147,28 +147,27 @@ class TestTrend:
         track = StormTrack(
             storm_id="t1",
             positions=[
-                (39.60, -84.50, 100),  # prev: farther from client at 39.5
-                (39.52, -84.50, 200),  # curr: closer
+                (39.60, -84.50, 100),
+                (39.52, -84.50, 200),
             ],
         )
-        # Client at 39.50
-        trend = compute_trend(track, 39.50, -84.50)
+        trend, conf = compute_trend(track, 39.50, -84.50)
         assert trend == "closing"
 
     def test_departing(self):
         track = StormTrack(
             storm_id="t1",
             positions=[
-                (39.52, -84.50, 100),  # prev: close
-                (39.60, -84.50, 200),  # curr: farther
+                (39.52, -84.50, 100),
+                (39.60, -84.50, 200),
             ],
         )
-        trend = compute_trend(track, 39.50, -84.50)
+        trend, conf = compute_trend(track, 39.50, -84.50)
         assert trend == "departing"
 
     def test_unknown_no_history(self):
         track = StormTrack(storm_id="t1", positions=[(39.50, -84.50, 100)])
-        trend = compute_trend(track, 39.50, -84.50)
+        trend, conf = compute_trend(track, 39.50, -84.50)
         assert trend == "unknown"
 
     def test_unknown_negligible_change(self):
@@ -176,25 +175,22 @@ class TestTrend:
             storm_id="t1",
             positions=[
                 (39.500, -84.500, 100),
-                (39.501, -84.500, 200),  # < 0.5 mi change
+                (39.501, -84.500, 200),
             ],
         )
-        trend = compute_trend(track, 39.50, -84.50)
+        trend, conf = compute_trend(track, 39.50, -84.50)
         assert trend == "unknown"
 
     def test_client_relative(self):
-        """Same storm, different clients → different trends."""
         track = StormTrack(
             storm_id="t1",
             positions=[
                 (39.50, -84.50, 100),
-                (39.55, -84.50, 200),  # moved north
+                (39.55, -84.50, 200),
             ],
         )
-        # Client north: storm closing
-        trend_north = compute_trend(track, 39.70, -84.50)
-        # Client south: storm departing
-        trend_south = compute_trend(track, 39.30, -84.50)
+        trend_north, _ = compute_trend(track, 39.70, -84.50)
+        trend_south, _ = compute_trend(track, 39.30, -84.50)
         assert trend_north == "closing"
         assert trend_south == "departing"
 

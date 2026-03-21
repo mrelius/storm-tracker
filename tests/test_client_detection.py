@@ -61,7 +61,9 @@ class TestClientRelativeDetection:
         # Client A: very close
         pipeline_a = DetectionPipeline()
         storm_a = _candidate_to_storm(c, ref_lat=39.5, ref_lon=-84.5)
-        storm_a.trend = Trend.closing  # simulate known closing trend
+        storm_a.trend = Trend.closing
+        storm_a.trend_confidence = 0.5
+        storm_a.motion_confidence = 0.8
         result_a = pipeline_a.process([storm_a])
         types_a = {e.type for e in result_a.events}
 
@@ -69,6 +71,7 @@ class TestClientRelativeDetection:
         pipeline_b = DetectionPipeline()
         storm_b = _candidate_to_storm(c, ref_lat=41.8, ref_lon=-87.6)
         storm_b.trend = Trend.closing
+        storm_b.trend_confidence = 0.5
         result_b = pipeline_b.process([storm_b])
         types_b = {e.type for e in result_b.events}
 

@@ -9,6 +9,7 @@ def _storm(**kwargs):
         id="c1", lat=39.5, lon=-84.5, distance_mi=15.0,
         bearing_deg=235, direction="NE", speed_mph=30,
         trend=Trend.closing, last_updated=time.time(),
+        motion_confidence=0.8,
     )
     defaults.update(kwargs)
     return StormObject(**defaults)
