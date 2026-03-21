@@ -31,8 +31,9 @@ def _alerts_cache_key(sort: str, order: str, category: str | None, active: bool,
     return f"alerts:{sort}:{order}:{cat}:{act}:{mar}:{_bucket_coord(lat)}:{_bucket_coord(lon)}"
 
 
-def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    R = 6371.0
+def haversine_mi(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Distance in miles between two lat/lon points."""
+    R = 3958.8  # Earth radius in miles
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
     a = (math.sin(dlat / 2) ** 2
@@ -128,8 +129,8 @@ async def list_alerts(
                 )
                 county = await c_row.fetchone()
                 if county:
-                    alert.distance_km = round(
-                        haversine_km(lat, lon, county["centroid_lat"], county["centroid_lon"]), 1
+                    alert.distance_mi = round(
+                        haversine_mi(lat, lon, county["centroid_lat"], county["centroid_lon"]), 1
                     )
 
             alerts.append(alert)
@@ -139,7 +140,7 @@ async def list_alerts(
         if sort == AlertSortField.severity:
             alerts.sort(key=lambda a: a.priority_score, reverse=reverse)
         elif sort == AlertSortField.distance:
-            alerts.sort(key=lambda a: a.distance_km if a.distance_km is not None else 99999,
+            alerts.sort(key=lambda a: a.distance_mi if a.distance_mi is not None else 99999,
                         reverse=reverse)
         elif sort == AlertSortField.issued:
             alerts.sort(key=lambda a: a.issued, reverse=reverse)

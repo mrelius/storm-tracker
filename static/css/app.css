@@ -548,6 +548,7 @@ html, body {
 
 #filter-controls {
     display: flex;
+    flex-wrap: wrap;
     gap: 4px;
 }
 
@@ -555,7 +556,7 @@ html, body {
     background: var(--bg-card);
     border: 1px solid var(--border);
     color: var(--text-secondary);
-    padding: 3px 10px;
+    padding: 3px 8px;
     cursor: pointer;
     border-radius: 4px;
     font-size: 11px;

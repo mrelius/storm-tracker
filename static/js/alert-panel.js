@@ -189,7 +189,7 @@ const AlertPanel = (function () {
 
     function buildAlertCard(alert) {
         const cssClass = getEventCssClass(alert.event);
-        const distText = alert.distance_km != null ? `${Math.round(alert.distance_km)} km` : "";
+        const distText = alert.distance_mi != null ? `${Math.round(alert.distance_mi)} mi` : "";
         const countdown = formatCountdown(alert.expires);
         const issued = formatTimeShort(alert.issued);
         const hasFocus = alert.polygon || (alert.county_fips && alert.county_fips.length > 0);
@@ -241,7 +241,7 @@ Certainty: ${alert.certainty}
 Issued: ${formatTimeLong(alert.issued)}
 Expires: ${formatTimeLong(alert.expires)} (${countdown.text})
 Sender: ${escapeHtml(alert.sender || "N/A")}
-Counties: ${alert.county_fips.length} affected${alert.distance_km != null ? `\nDistance: ${Math.round(alert.distance_km)} km` : ""}</div>
+Counties: ${alert.county_fips.length} affected${alert.distance_mi != null ? `\nDistance: ${Math.round(alert.distance_mi)} mi` : ""}</div>
             </div>`;
 
         // Wire focus button

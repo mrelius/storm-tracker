@@ -43,7 +43,7 @@ class AlertOut(BaseModel):
     sender: str | None = None
     priority_score: int
     county_fips: list[str] = []
-    distance_km: float | None = None
+    distance_mi: float | None = None
 
 
 class AlertCountyMap(BaseModel):
