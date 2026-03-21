@@ -1,6 +1,7 @@
 """Tests for impact prediction — CPA, classification, and integration (Phase 19)."""
 from services.detection.impact import (
     compute_impact, GLANCE_MARGIN_MI, _offset_direction,
+    _bearing_to_cardinal, _approach_phrase, _build_description,
 )
 
 
@@ -281,3 +282,120 @@ class TestImpactSeverityScore:
             storm_radius_mi=5.0, reflectivity_dbz=50,
         )
         assert result["impact_severity_label"] in ("low", "moderate")
+
+
+# === Phase 21: Geographic Context Language ===
+
+class TestCardinalDirection:
+    def test_north(self):
+        assert _bearing_to_cardinal(0) == "north"
+
+    def test_northeast(self):
+        assert _bearing_to_cardinal(45) == "northeast"
+
+    def test_south(self):
+        assert _bearing_to_cardinal(180) == "south"
+
+    def test_west(self):
+        assert _bearing_to_cardinal(270) == "west"
+
+    def test_wrap(self):
+        assert _bearing_to_cardinal(360) == "north"
+
+
+class TestApproachPhrase:
+    def test_storm_southwest(self):
+        # Storm is southwest of client
+        phrase = _approach_phrase(39.0, -85.0, 39.5, -84.5)
+        assert "southwest" in phrase
+        assert "from the" in phrase
+
+    def test_storm_north(self):
+        phrase = _approach_phrase(40.0, -84.5, 39.5, -84.5)
+        assert "north" in phrase
+
+
+class TestMessageSynthesis:
+    def test_direct_hit_message(self):
+        msg = _build_description(
+            "direct_hit", "severe", 12, 3, "north",
+            "from the southwest", "moving northeast", "strengthening",
+        )
+        assert "Severe" in msg
+        assert "southwest" in msg
+        assert "12 min" in msg
+        assert "impact" in msg
+        assert "strengthening" in msg
+
+    def test_near_miss_message(self):
+        msg = _build_description(
+            "near_miss", "strong", 15, 8, "north",
+            "from the west", "moving east", "stable",
+        )
+        assert "Strong" in msg
+        assert "north" in msg
+        assert "passing" in msg
+
+    def test_passing_message(self):
+        msg = _build_description(
+            "passing", "moderate", 30, 25, "south",
+            "from the north", "moving southeast", "stable",
+        )
+        assert "south" in msg
+        assert "moving" in msg.lower()
+
+    def test_uncertain_message(self):
+        msg = _build_description(
+            "uncertain", "unknown", 0, 0, "",
+            "", "", "unknown",
+        )
+        assert "uncertain" in msg.lower()
+
+    def test_weakening_suffix(self):
+        msg = _build_description(
+            "direct_hit", "strong", 10, 2, "north",
+            "from the south", "moving north", "weakening",
+        )
+        assert "weakening" in msg
+
+    def test_at_location(self):
+        msg = _build_description(
+            "direct_hit", "severe", 0, 0, "north",
+            "from the south", "moving north", "stable",
+        )
+        assert "at your location" in msg
+
+
+class TestIntegratedDescriptions:
+    def test_direct_hit_full_context(self):
+        result = compute_impact(
+            39.0, -84.5, 0, 30, 39.5, -84.5, 0.8,
+            storm_radius_mi=7.0, reflectivity_dbz=60,
+            intensity_trend="strengthening",
+        )
+        desc = result["impact_description"]
+        assert "southwest" in desc or "south" in desc  # storm is south of client
+        assert "impact" in desc or "area" in desc
+        assert len(desc) > 20
+
+    def test_near_miss_has_side(self):
+        result = compute_impact(
+            39.0, -84.6, 0, 30, 39.5, -84.5, 0.8,
+            storm_radius_mi=3.0, reflectivity_dbz=50,
+        )
+        desc = result["impact_description"]
+        assert "pass" in desc.lower() or "miss" in desc.lower() or "stay" in desc.lower()
+
+    def test_approach_direction_present(self):
+        result = compute_impact(
+            39.0, -84.5, 0, 30, 39.5, -84.5, 0.8,
+            storm_radius_mi=7.0, reflectivity_dbz=60,
+        )
+        assert result.get("approach_direction", "") != ""
+
+    def test_pass_side_present(self):
+        result = compute_impact(
+            39.0, -84.6, 0, 30, 39.5, -84.5, 0.8,
+            storm_radius_mi=3.0, reflectivity_dbz=50,
+        )
+        assert result.get("pass_side", "") != ""

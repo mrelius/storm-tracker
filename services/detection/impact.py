@@ -105,6 +105,61 @@ def project_severity(
     return (label, score)
 
 
+def _bearing_to_cardinal(bearing: float) -> str:
+    """Convert bearing degrees to lowercase cardinal direction."""
+    directions = ["north", "northeast", "east", "southeast",
+                  "south", "southwest", "west", "northwest"]
+    idx = round(bearing / 45) % 8
+    return directions[idx]
+
+
+def _approach_phrase(storm_lat: float, storm_lon: float,
+                     client_lat: float, client_lon: float) -> str:
+    """'from the southwest' — direction storm is approaching from."""
+    dlat = storm_lat - client_lat
+    dlon = storm_lon - client_lon
+    angle = math.degrees(math.atan2(dlon, dlat)) % 360
+    return f"from the {_bearing_to_cardinal(angle)}"
+
+
+def _travel_phrase(heading_deg: float) -> str:
+    """'moving northeast' — direction storm is traveling."""
+    return f"moving {_bearing_to_cardinal(heading_deg)}"
+
+
+def _build_description(
+    impact: str,
+    sev_label: str,
+    t_cpa_min: float,
+    cpa_dist: float,
+    pass_side: str,
+    approach: str,
+    travel: str,
+    intensity_trend: str,
+) -> str:
+    """Generate human-readable impact description combining all context."""
+    sev = sev_label.capitalize()
+    intensity_suffix = ""
+    if intensity_trend == "strengthening":
+        intensity_suffix = " and strengthening"
+    elif intensity_trend == "weakening":
+        intensity_suffix = " and weakening"
+
+    if impact == "direct_hit":
+        if t_cpa_min > 0:
+            return f"{sev} storm {approach}{intensity_suffix}, on track to impact your area in ~{int(t_cpa_min)} min"
+        return f"{sev} storm at your location"
+
+    if impact == "near_miss":
+        time_part = f" in ~{int(t_cpa_min)} min" if t_cpa_min > 0 else ""
+        return f"{sev} storm {approach}, passing {pass_side} of you{time_part}"
+
+    if impact == "passing":
+        return f"Storm {travel}, likely to stay {pass_side} of your area"
+
+    return "Storm nearby, trajectory uncertain"
+
+
 def compute_impact(
     storm_lat: float, storm_lon: float,
     heading_deg: float, speed_mph: float,
@@ -198,20 +253,26 @@ def compute_impact(
     result["projected_severity_label"] = sev_label
     result["projected_severity_score"] = sev_score
 
+    # Geographic context
+    approach = _approach_phrase(storm_lat, storm_lon, client_lat, client_lon)
+    travel = _travel_phrase(heading_deg)
+    pass_side = _offset_direction(client_lat, client_lon, cpa_lat, cpa_lon)
+
     # Area-aware classification using storm radius
     if cpa_dist <= storm_radius_mi:
         result["impact"] = "direct_hit"
-        if t_cpa_min > 0:
-            result["impact_description"] = f"{sev_label.capitalize()} storm on track to impact your area in ~{int(t_cpa_min)} min"
-        else:
-            result["impact_description"] = f"{sev_label.capitalize()} storm at your location"
     elif cpa_dist <= storm_radius_mi + GLANCE_MARGIN_MI:
         result["impact"] = "near_miss"
-        cardinal = _offset_direction(client_lat, client_lon, cpa_lat, cpa_lon)
-        result["impact_description"] = f"{sev_label.capitalize()} storm will pass ~{int(cpa_dist)} mi {cardinal} of you"
     else:
         result["impact"] = "passing"
-        result["impact_description"] = "Likely to miss your area"
+
+    # Human-readable description with full geographic context
+    result["impact_description"] = _build_description(
+        result["impact"], sev_label, t_cpa_min, cpa_dist,
+        pass_side, approach, travel, intensity_trend,
+    )
+    result["approach_direction"] = approach
+    result["pass_side"] = pass_side
 
     # Impact severity score: combines classification + projected severity
     impact_weight = {"direct_hit": 1.0, "near_miss": 0.6, "passing": 0.2}.get(result["impact"], 0.3)
