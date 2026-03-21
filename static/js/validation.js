@@ -48,8 +48,10 @@ const Validation = (function () {
         map = leafletMap;
         inspectPanel = document.getElementById("validation-panel");
 
-        document.getElementById("btn-validation-toggle").addEventListener("click", toggle);
-        document.getElementById("btn-val-copy").addEventListener("click", copyToClipboard);
+        const toggleBtn = document.getElementById("btn-validation-toggle");
+        const copyBtn = document.getElementById("btn-val-copy");
+        if (toggleBtn) toggleBtn.addEventListener("click", toggle);
+        if (copyBtn) copyBtn.addEventListener("click", copyToClipboard);
     }
 
     function toggle() {
