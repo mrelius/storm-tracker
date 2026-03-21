@@ -269,6 +269,24 @@ html, body {
     animation: pulse 1.2s ease-in-out infinite;
 }
 
+/* WS status indicator */
+.ws-indicator {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
+.ws-connected {
+    background: #22c55e;
+}
+
+.ws-disconnected {
+    background: var(--text-muted);
+}
+
 .storm-alert-empty {
     text-align: center;
     padding: 12px;

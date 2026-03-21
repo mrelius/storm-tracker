@@ -20,6 +20,7 @@ from services.radar.registry import register
 from services.radar.rainviewer import RainViewerProvider
 from services.radar.iem import IEMRadarProvider
 from services.radar.nexrad_cc import NexradCCProvider
+from fastapi import WebSocket, WebSocketDisconnect
 from routers import alerts, radar, location, health, detections, storm_alerts
 
 settings = get_settings()
@@ -93,6 +94,28 @@ app.include_router(location.router)
 app.include_router(health.router)
 app.include_router(detections.router)
 app.include_router(storm_alerts.router)
+
+@app.websocket("/ws/storm-alerts")
+async def storm_alerts_ws(ws: WebSocket):
+    from services.detection.ws_manager import get_ws_manager
+    from routers.ws_alerts import _snapshot_message
+    manager = get_ws_manager()
+    await manager.connect(ws)
+    try:
+        await manager.send_to(ws, _snapshot_message())
+    except Exception:
+        manager.disconnect(ws)
+        return
+    try:
+        while True:
+            data = await ws.receive_text()
+            if data == "ping":
+                await manager.send_to(ws, {"type": "pong"})
+    except WebSocketDisconnect:
+        manager.disconnect(ws)
+    except Exception:
+        manager.disconnect(ws)
+
 
 app.mount("/data", StaticFiles(directory="data"), name="data")
 app.mount("/static", StaticFiles(directory="static"), name="static")

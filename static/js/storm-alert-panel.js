@@ -1,17 +1,111 @@
 /**
  * Storm Tracker — Storm Alert Panel
  * Displays active storm alerts from the detection engine.
- * Polls GET /api/storm-alerts on interval, renders severity-ranked cards.
+ * Primary: WebSocket push (instant updates).
+ * Fallback: HTTP polling every 30s.
  */
 const StormAlertPanel = (function () {
     const POLL_INTERVAL = 30000;
+    const WS_RECONNECT_BASE = 5000;
+    const WS_RECONNECT_MAX = 30000;
     let pollTimer = null;
-    let lastAlertIds = "";  // track for stable refresh
+    let ws = null;
+    let wsReconnectDelay = WS_RECONNECT_BASE;
+    let wsReconnectTimer = null;
+    let lastAlertIds = "";
 
     function init() {
+        // Start polling as fallback
         fetchAndRender();
         pollTimer = setInterval(fetchAndRender, POLL_INTERVAL);
+
+        // Connect WebSocket (primary fast path)
+        connectWS();
     }
+
+    // --- WebSocket ---
+
+    function connectWS() {
+        if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+            return;
+        }
+
+        const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const url = `${proto}//${window.location.host}/ws/storm-alerts`;
+
+        try {
+            ws = new WebSocket(url);
+        } catch (e) {
+            console.warn("WS connect failed:", e);
+            scheduleReconnect();
+            return;
+        }
+
+        ws.onopen = () => {
+            console.log("[StormAlerts] WS connected");
+            wsReconnectDelay = WS_RECONNECT_BASE;
+            updateWSIndicator(true);
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                const msg = JSON.parse(event.data);
+                handleWSMessage(msg);
+            } catch (e) {
+                console.warn("WS message parse error:", e);
+            }
+        };
+
+        ws.onclose = () => {
+            console.log("[StormAlerts] WS disconnected");
+            updateWSIndicator(false);
+            scheduleReconnect();
+        };
+
+        ws.onerror = () => {
+            // onclose will also fire
+            updateWSIndicator(false);
+        };
+    }
+
+    function handleWSMessage(msg) {
+        switch (msg.type) {
+            case "snapshot":
+                render(msg.alerts || []);
+                break;
+            case "created":
+            case "escalated":
+            case "expired":
+                // Lifecycle event — trigger a full render from the included data
+                // or just refetch to stay consistent
+                fetchAndRender();
+                break;
+            case "pong":
+                break;
+            default:
+                break;
+        }
+    }
+
+    function scheduleReconnect() {
+        if (wsReconnectTimer) return;
+        wsReconnectTimer = setTimeout(() => {
+            wsReconnectTimer = null;
+            wsReconnectDelay = Math.min(wsReconnectDelay * 1.5, WS_RECONNECT_MAX);
+            connectWS();
+        }, wsReconnectDelay);
+    }
+
+    function updateWSIndicator(connected) {
+        const el = document.getElementById("ws-status");
+        if (el) {
+            el.classList.toggle("ws-connected", connected);
+            el.classList.toggle("ws-disconnected", !connected);
+            el.title = connected ? "Live updates active" : "Live updates disconnected";
+        }
+    }
+
+    // --- HTTP Polling (fallback) ---
 
     async function fetchAndRender() {
         const loc = StormState.state.location;
@@ -29,6 +123,8 @@ const StormAlertPanel = (function () {
             renderError();
         }
     }
+
+    // --- Render ---
 
     function render(alerts) {
         const container = document.getElementById("storm-alert-list");
@@ -54,14 +150,11 @@ const StormAlertPanel = (function () {
 
         container.innerHTML = alerts.map(buildCard).join("");
 
-        // Wire click handlers
         container.querySelectorAll(".storm-alert-card").forEach(card => {
             card.addEventListener("click", () => {
                 const lat = parseFloat(card.dataset.lat);
                 const lon = parseFloat(card.dataset.lon);
                 if (!isNaN(lat) && !isNaN(lon)) {
-                    StormMap.focusOnAlert({ polygon: null, county_fips: [], lat, lon });
-                    // Direct map zoom since focusOnAlert expects alert shape
                     const map = StormMap.getMap();
                     if (map) map.setView([lat, lon], 8);
                 }

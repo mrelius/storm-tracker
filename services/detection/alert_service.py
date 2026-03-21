@@ -17,6 +17,7 @@ from services.detection.alert_engine import (
     AlertStore, AlertStatus, StormAlert,
     get_store, run_alert_cycle,
 )
+from services.detection.ws_manager import get_ws_manager
 
 logger = logging.getLogger(__name__)
 
@@ -115,32 +116,46 @@ async def run_cycle_once(
             # Run the full alert cycle
             result = await run_alert_cycle(ref_lat=lat, ref_lon=lon)
 
-            # Record history for changed alerts
+            # Record history + collect lifecycle events for WS broadcast
             store = get_store()
+            ws_events = []
             for alert in result.get("alerts", []):
                 if alert.status == AlertStatus.new:
                     record_history(alert, "created")
+                    ws_events.append(("created", alert))
                 elif alert.status == AlertStatus.escalated:
                     record_history(alert, "escalated")
+                    ws_events.append(("escalated", alert))
 
-            # Record expired alerts (they're in the store but not in active list)
             for alert in store.get_all_alerts():
                 if alert.status == AlertStatus.expired:
-                    # Only record if recently expired (within this cycle)
                     if time.time() - alert.updated_at < 5:
                         record_history(alert, "expired")
+                        ws_events.append(("expired", alert))
 
             # Update snapshot
+            now = time.time()
             _snapshot = AlertSnapshot(
                 alerts=result["alerts"],
                 count=result["count"],
-                updated_at=time.time(),
+                updated_at=now,
                 detections_processed=result["detections_processed"],
                 alerts_changed=result["alerts_changed"],
                 alerts_expired=result["alerts_expired"],
                 cycle_status="ok",
-                last_success=time.time(),
+                last_success=now,
             )
+
+            # Broadcast via WebSocket if there are changes or clients
+            manager = get_ws_manager()
+            if manager.client_count > 0:
+                # Send lifecycle events
+                for action, alert in ws_events:
+                    await manager.broadcast(_alert_ws_payload(action, alert))
+
+                # Send updated snapshot if anything changed
+                if result["alerts_changed"] > 0 or result["alerts_expired"] > 0 or ws_events:
+                    await manager.broadcast(_snapshot_ws_payload())
 
         except Exception as e:
             logger.error(f"Alert cycle failed: {e}")
@@ -172,6 +187,44 @@ async def run_alert_loop():
 def stop_alert_loop():
     global _running
     _running = False
+
+
+def _alert_to_dict(alert: StormAlert) -> dict:
+    return {
+        "alert_id": alert.alert_id,
+        "storm_id": alert.storm_id,
+        "type": alert.type,
+        "severity": alert.severity,
+        "confidence": alert.confidence,
+        "title": alert.title,
+        "message": alert.message,
+        "status": alert.status.value if hasattr(alert.status, "value") else alert.status,
+        "distance_mi": alert.distance_mi,
+        "direction": alert.direction,
+        "bearing_deg": alert.bearing_deg,
+        "eta_min": alert.eta_min,
+        "lat": alert.lat,
+        "lon": alert.lon,
+        "speed_mph": alert.speed_mph,
+    }
+
+
+def _snapshot_ws_payload() -> dict:
+    return {
+        "type": "snapshot",
+        "alerts": [_alert_to_dict(a) for a in _snapshot.alerts],
+        "count": _snapshot.count,
+        "updated_at": _snapshot.updated_at,
+        "cycle_status": _snapshot.cycle_status,
+    }
+
+
+def _alert_ws_payload(action: str, alert: StormAlert) -> dict:
+    return {
+        "type": action,
+        "alert": _alert_to_dict(alert),
+        "updated_at": time.time(),
+    }
 
 
 def reset_service():
