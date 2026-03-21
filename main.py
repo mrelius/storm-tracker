@@ -97,20 +97,42 @@ app.include_router(storm_alerts.router)
 
 @app.websocket("/ws/storm-alerts")
 async def storm_alerts_ws(ws: WebSocket):
+    import json as _json
     from services.detection.ws_manager import get_ws_manager
+    from services.detection.alert_service import build_client_snapshot
     from routers.ws_alerts import _snapshot_message
     manager = get_ws_manager()
     await manager.connect(ws)
+
+    # Send default snapshot immediately
     try:
         await manager.send_to(ws, _snapshot_message())
     except Exception:
         manager.disconnect(ws)
         return
+
     try:
         while True:
-            data = await ws.receive_text()
-            if data == "ping":
+            raw = await ws.receive_text()
+            if raw == "ping":
                 await manager.send_to(ws, {"type": "pong"})
+                continue
+
+            # Parse JSON messages
+            try:
+                msg = _json.loads(raw)
+            except (ValueError, TypeError):
+                continue
+
+            if msg.get("type") == "subscribe":
+                lat = msg.get("lat")
+                lon = msg.get("lon")
+                if lat is not None and lon is not None:
+                    if manager.set_location(ws, float(lat), float(lon)):
+                        # Send client-relative snapshot
+                        ctx = manager.get_context(ws)
+                        if ctx:
+                            await manager.send_to(ws, build_client_snapshot(ctx))
     except WebSocketDisconnect:
         manager.disconnect(ws)
     except Exception:

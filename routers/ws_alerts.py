@@ -41,6 +41,7 @@ def _snapshot_message() -> dict:
         "count": snap.count,
         "updated_at": snap.updated_at,
         "cycle_status": snap.cycle_status,
+        "location_source": "default",
     }
 
 

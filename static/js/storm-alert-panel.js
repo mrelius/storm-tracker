@@ -21,6 +21,21 @@ const StormAlertPanel = (function () {
 
         // Connect WebSocket (primary fast path)
         connectWS();
+
+        // Re-subscribe when location changes
+        StormState.on("locationChanged", () => sendSubscribe());
+    }
+
+    function sendSubscribe() {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const loc = StormState.state.location;
+        if (loc.lat != null && loc.lon != null) {
+            ws.send(JSON.stringify({
+                type: "subscribe",
+                lat: loc.lat,
+                lon: loc.lon,
+            }));
+        }
     }
 
     // --- WebSocket ---
@@ -45,6 +60,7 @@ const StormAlertPanel = (function () {
             console.log("[StormAlerts] WS connected");
             wsReconnectDelay = WS_RECONNECT_BASE;
             updateWSIndicator(true);
+            sendSubscribe();
         };
 
         ws.onmessage = (event) => {
@@ -72,6 +88,7 @@ const StormAlertPanel = (function () {
         switch (msg.type) {
             case "snapshot":
                 render(msg.alerts || []);
+                updateLocationSource(msg.location_source);
                 break;
             case "created":
             case "escalated":
@@ -198,6 +215,13 @@ const StormAlertPanel = (function () {
             case 3: return "sa-sev-3";
             case 4: return "sa-sev-4";
             default: return "sa-sev-1";
+        }
+    }
+
+    function updateLocationSource(source) {
+        const el = document.getElementById("alert-location-source");
+        if (el) {
+            el.textContent = source === "client" ? "Your location" : "Default location";
         }
     }
 

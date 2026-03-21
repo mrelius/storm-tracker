@@ -314,6 +314,14 @@ html, body {
     cursor: not-allowed;
 }
 
+.alert-loc-source {
+    font-size: 9px;
+    color: var(--text-muted);
+    text-align: right;
+    padding: 0 4px 4px 0;
+    font-family: monospace;
+}
+
 .storm-alert-empty {
     text-align: center;
     padding: 12px;

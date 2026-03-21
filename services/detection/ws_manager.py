@@ -1,32 +1,61 @@
 """WebSocket connection manager for storm alert broadcasts.
 
-Tracks connected clients, broadcasts messages safely,
-removes dead clients on error.
+Tracks connected clients with per-client location context.
+Broadcasts messages safely, removes dead clients on error.
 """
 import json
 import logging
 import time
+from dataclasses import dataclass
+from typing import Optional
 from fastapi import WebSocket
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class ClientContext:
+    """Per-connection metadata."""
+    ws: WebSocket
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    using_client_location: bool = False
+    connected_at: float = 0.0
+    last_subscribe: float = 0.0
+
+
 class AlertWSManager:
-    """Manages WebSocket connections for storm alert push delivery."""
+    """Manages WebSocket connections with per-client location context."""
 
     def __init__(self):
-        self._clients: list[WebSocket] = []
+        self._clients: dict[WebSocket, ClientContext] = {}
         self._last_broadcast: float = 0
 
     async def connect(self, ws: WebSocket):
         await ws.accept()
-        self._clients.append(ws)
+        self._clients[ws] = ClientContext(ws=ws, connected_at=time.time())
         logger.info(f"WS client connected ({self.client_count} total)")
 
     def disconnect(self, ws: WebSocket):
         if ws in self._clients:
-            self._clients.remove(ws)
+            del self._clients[ws]
         logger.info(f"WS client disconnected ({self.client_count} remaining)")
+
+    def get_context(self, ws: WebSocket) -> Optional[ClientContext]:
+        return self._clients.get(ws)
+
+    def set_location(self, ws: WebSocket, lat: float, lon: float) -> bool:
+        """Set client-specific reference location. Returns True if valid."""
+        if ws not in self._clients:
+            return False
+        if not _valid_coords(lat, lon):
+            return False
+        ctx = self._clients[ws]
+        ctx.lat = lat
+        ctx.lon = lon
+        ctx.using_client_location = True
+        ctx.last_subscribe = time.time()
+        return True
 
     @property
     def client_count(self) -> int:
@@ -35,6 +64,9 @@ class AlertWSManager:
     @property
     def last_broadcast(self) -> float:
         return self._last_broadcast
+
+    def get_all_contexts(self) -> list[ClientContext]:
+        return list(self._clients.values())
 
     async def broadcast(self, message: dict):
         """Send message to all connected clients. Dead clients removed safely."""
@@ -45,17 +77,14 @@ class AlertWSManager:
         self._last_broadcast = time.time()
         dead = []
 
-        for client in self._clients:
+        for ws in list(self._clients.keys()):
             try:
-                await client.send_text(payload)
+                await ws.send_text(payload)
             except Exception:
-                dead.append(client)
+                dead.append(ws)
 
-        for client in dead:
-            self.disconnect(client)
-
-        if dead:
-            logger.debug(f"Removed {len(dead)} dead WS clients")
+        for ws in dead:
+            self.disconnect(ws)
 
     async def send_to(self, ws: WebSocket, message: dict):
         """Send message to a single client."""
@@ -63,6 +92,26 @@ class AlertWSManager:
             await ws.send_text(json.dumps(message, default=str))
         except Exception:
             self.disconnect(ws)
+
+    async def send_to_each(self, message_fn):
+        """Send per-client messages. message_fn(ctx) → dict or None."""
+        dead = []
+        for ws, ctx in list(self._clients.items()):
+            try:
+                msg = message_fn(ctx)
+                if msg:
+                    await ws.send_text(json.dumps(msg, default=str))
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(ws)
+
+
+def _valid_coords(lat: float, lon: float) -> bool:
+    try:
+        return -90 <= float(lat) <= 90 and -180 <= float(lon) <= 180
+    except (TypeError, ValueError):
+        return False
 
 
 # Singleton

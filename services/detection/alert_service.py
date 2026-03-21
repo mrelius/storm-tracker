@@ -17,7 +17,10 @@ from services.detection.alert_engine import (
     AlertStore, AlertStatus, StormAlert,
     get_store, run_alert_cycle,
 )
-from services.detection.ws_manager import get_ws_manager
+from services.detection.geometry import haversine_mi, compute_bearing, bearing_to_direction
+from services.detection.eta import compute_eta
+from services.detection.models import StormObject, Trend
+from services.detection.ws_manager import get_ws_manager, ClientContext
 
 logger = logging.getLogger(__name__)
 
@@ -149,13 +152,15 @@ async def run_cycle_once(
             # Broadcast via WebSocket if there are changes or clients
             manager = get_ws_manager()
             if manager.client_count > 0:
-                # Send lifecycle events
+                # Send lifecycle events (same for all clients — raw event data)
                 for action, alert in ws_events:
                     await manager.broadcast(_alert_ws_payload(action, alert))
 
-                # Send updated snapshot if anything changed
+                # Send per-client reprojected snapshots if anything changed
                 if result["alerts_changed"] > 0 or result["alerts_expired"] > 0 or ws_events:
-                    await manager.broadcast(_snapshot_ws_payload())
+                    await manager.send_to_each(
+                        lambda ctx: build_client_snapshot(ctx)
+                    )
 
         except Exception as e:
             logger.error(f"Alert cycle failed: {e}")
@@ -187,6 +192,45 @@ async def run_alert_loop():
 def stop_alert_loop():
     global _running
     _running = False
+
+
+def _reproject_alert(alert_dict: dict, ref_lat: float, ref_lon: float) -> dict:
+    """Recompute distance/bearing/direction/ETA for an alert relative to a client location."""
+    d = dict(alert_dict)  # shallow copy
+    storm_lat = d.get("lat", 0)
+    storm_lon = d.get("lon", 0)
+    if storm_lat == 0 and storm_lon == 0:
+        return d
+
+    d["distance_mi"] = round(haversine_mi(ref_lat, ref_lon, storm_lat, storm_lon), 1)
+    bearing = compute_bearing(ref_lat, ref_lon, storm_lat, storm_lon)
+    d["bearing_deg"] = bearing
+    d["direction"] = bearing_to_direction(bearing)
+
+    speed = d.get("speed_mph", 0)
+    if speed > 0 and d["distance_mi"] > 0:
+        d["eta_min"] = round(d["distance_mi"] / speed * 60, 1)
+    else:
+        d["eta_min"] = None
+
+    return d
+
+
+def build_client_snapshot(ctx: ClientContext) -> dict:
+    """Build a snapshot payload reprojected to a client's location."""
+    base = _snapshot_ws_payload()
+
+    if ctx.using_client_location and ctx.lat is not None and ctx.lon is not None:
+        base["alerts"] = [
+            _reproject_alert(a, ctx.lat, ctx.lon) for a in base["alerts"]
+        ]
+        # Re-sort: severity desc, distance asc
+        base["alerts"].sort(key=lambda a: (-a.get("severity", 0), a.get("distance_mi", 9999)))
+        base["location_source"] = "client"
+    else:
+        base["location_source"] = "default"
+
+    return base
 
 
 def _alert_to_dict(alert: StormAlert) -> dict:
