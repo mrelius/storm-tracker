@@ -85,8 +85,13 @@ async def refresh_base_candidates():
     """Global phase: fetch NWS alerts → extract centroids → enrich CC → track.
 
     Produces shared tracked storms with motion vectors.
+    Skipped entirely during active simulation to preserve injected data.
     """
     global _base_candidates, _tracked_storms
+
+    from services.detection.simulator import is_simulation_active
+    if is_simulation_active():
+        return
 
     alerts = await fetch_severe_alerts()
     if not alerts:

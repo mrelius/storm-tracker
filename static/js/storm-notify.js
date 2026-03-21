@@ -1,15 +1,23 @@
 /**
  * Storm Tracker — Browser Notification Module
- * Shows browser notifications for critical storm alerts (severity 3-4).
- * Triggered ONLY by WebSocket lifecycle events (created/escalated).
- * Independent from audio — both can fire for the same event.
+ *
+ * Single source of truth: BACKEND decides whether to notify.
+ * Frontend only consumes backend-approved notification payloads.
+ *
+ * Backend sends notification decision in WS lifecycle events:
+ *   { type: "created"|"escalated", alert: {...}, notification: {title, body, ...} }
+ *
+ * Frontend role:
+ * - Display browser notification from backend-approved payload
+ * - Avoid duplicate browser notifications for same event
+ * - Handle permission and opt-in state
  */
 const StormNotify = (function () {
     const STORAGE_KEY = "storm_notify_enabled";
-    const COOLDOWN_MS = 15000;
+    const DEDUP_WINDOW_MS = 10000;  // ignore duplicate payloads within 10s
 
+    let lastNotifyKey = "";
     let lastNotifyTime = 0;
-    let notifiedAlerts = {};  // alertId → lastNotifiedSeverity
 
     function init() {
         const btn = document.getElementById("btn-notify-toggle");
@@ -34,17 +42,15 @@ const StormNotify = (function () {
     function isEnabled() {
         if (!isSupported()) return false;
         const stored = localStorage.getItem(STORAGE_KEY);
-        return stored === "true";  // default OFF (conservative — requires explicit opt-in)
+        return stored === "true";
     }
 
     async function onToggleClick() {
         if (!isSupported()) return;
 
         if (isEnabled()) {
-            // Turn off
             localStorage.setItem(STORAGE_KEY, "false");
         } else {
-            // Turn on — request permission if needed
             if (Notification.permission === "default") {
                 const result = await Notification.requestPermission();
                 if (result !== "granted") {
@@ -66,21 +72,21 @@ const StormNotify = (function () {
         if (!btn) return;
 
         if (!isSupported()) {
-            btn.textContent = "⊘";
+            btn.textContent = "\u2298";
             btn.title = "Browser notifications not supported";
             btn.classList.add("notify-unsupported");
             return;
         }
 
         if (isPermissionDenied()) {
-            btn.textContent = "⊘";
-            btn.title = "Notifications blocked by browser — check site permissions";
+            btn.textContent = "\u2298";
+            btn.title = "Notifications blocked by browser \u2014 check site permissions";
             btn.classList.add("notify-denied");
             return;
         }
 
         const on = isEnabled();
-        btn.textContent = on ? "📢" : "🔇";
+        btn.textContent = on ? "\uD83D\uDD14" : "\uD83D\uDD07";
         btn.title = on
             ? "Browser notifications: ON (click to disable)"
             : "Browser notifications: OFF (click to enable)";
@@ -90,41 +96,38 @@ const StormNotify = (function () {
     }
 
     /**
-     * Evaluate a WebSocket lifecycle event and show notification if appropriate.
+     * Evaluate a WebSocket lifecycle event.
+     * Backend is source of truth — only show notification if backend included payload.
+     *
      * @param {string} eventType - "created" or "escalated"
-     * @param {object} alert - the alert object from the WS message
+     * @param {object} alert - the alert object
+     * @param {object} notification - backend notification payload (may be undefined)
      */
-    function evaluate(eventType, alert) {
+    function evaluate(eventType, alert, notification) {
+        if (!notification) return;  // backend did not approve notification
         if (!alert || !alert.alert_id) return;
         if (eventType !== "created" && eventType !== "escalated") return;
-        if (alert.severity < 3) return;
         if (!isEnabled() || !isPermissionGranted()) return;
 
-        const alertId = alert.alert_id;
-        const prevSeverity = notifiedAlerts[alertId];
-
-        // Already notified at this or higher severity
-        if (prevSeverity !== undefined && alert.severity <= prevSeverity) return;
-
-        notifiedAlerts[alertId] = alert.severity;
-
-        // Global cooldown
+        // Dedup: same alert_id + event_type within window
+        const key = `${alert.alert_id}:${eventType}`;
         const now = Date.now();
-        if (now - lastNotifyTime < COOLDOWN_MS) return;
+        if (key === lastNotifyKey && (now - lastNotifyTime) < DEDUP_WINDOW_MS) return;
+        lastNotifyKey = key;
         lastNotifyTime = now;
 
-        showNotification(alert);
+        showNotification(notification, alert);
     }
 
-    function showNotification(alert) {
+    function showNotification(payload, alert) {
         try {
-            const title = alert.title || "Storm Alert";
-            const body = alert.message || "Critical storm alert detected.";
+            const title = payload.title || "Storm Alert";
+            const body = payload.body || payload.summary || "Storm alert detected.";
 
             const notification = new Notification(title, {
                 body: body,
-                tag: alert.alert_id,  // replaces existing notification with same tag
-                requireInteraction: alert.severity >= 4,
+                tag: alert.alert_id,
+                requireInteraction: (payload.action_state === "take_action"),
                 silent: true,  // audio handled separately by StormAudio
             });
 
@@ -138,11 +141,7 @@ const StormNotify = (function () {
     }
 
     function cleanup() {
-        const keys = Object.keys(notifiedAlerts);
-        if (keys.length > 200) {
-            const toRemove = keys.slice(0, keys.length - 100);
-            toRemove.forEach(k => delete notifiedAlerts[k]);
-        }
+        // No-op — dedup is time-based, no unbounded state
     }
 
     return { init, evaluate, cleanup, isEnabled, isSupported };

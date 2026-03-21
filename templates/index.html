@@ -6,7 +6,7 @@
     <title>Storm Tracker</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="stylesheet" href="/static/css/app.css?v=26" />
+    <link rel="stylesheet" href="/static/css/app.css?v=33" />
 </head>
 <body>
     <div id="app">
@@ -15,7 +15,6 @@
 
         <!-- Staleness Warning Banner -->
         <div id="staleness-banner" class="staleness-banner hidden"></div>
-        <div id="sim-banner" class="sim-banner hidden">SIMULATION MODE — NOT LIVE DATA</div>
 
         <!-- Top Bar -->
         <div id="top-bar">
@@ -31,7 +30,8 @@
             <div id="top-bar-right">
                 <span id="radar-timestamp" class="radar-info">Radar: --</span>
                 <span id="radar-age" class="radar-info"></span>
-                <button id="btn-validation-toggle" class="radar-btn" title="Validation Mode" style="font-size:11px;padding:3px 8px;">VAL</button>
+                <button id="btn-feedback" class="radar-btn" title="Send feedback" style="font-size:11px;padding:3px 8px;">FB</button>
+                <button id="btn-minimize-header" class="radar-btn" title="Minimize header" style="font-size:11px;padding:3px 8px;">&#9650;</button>
                 <button id="btn-toggle-panel" title="Toggle Alert Panel">&#9776;</button>
             </div>
         </div>
@@ -141,16 +141,6 @@
                     <h3>Storm Alerts <span id="storm-alert-count" class="badge">0</span> <span id="ws-status" class="ws-indicator ws-disconnected" title="Live updates"></span> <button id="btn-sound-toggle" class="sound-toggle" title="Alert sound">🔔</button> <button id="btn-notify-toggle" class="sound-toggle" title="Browser notifications">🔇</button></h3>
                 </div>
                 <div id="alert-location-source" class="alert-loc-source">Default location</div>
-                <div class="sa-sim-row">
-                    <select id="sim-scenario" class="sim-select">
-                        <option value="">Simulate...</option>
-                        <option value="direct_hit">Direct Hit</option>
-                        <option value="near_miss">Near Miss</option>
-                        <option value="multi_storm">Multi Storm</option>
-                        <option value="escalation">Escalation</option>
-                    </select>
-                    <button class="sim-btn" id="btn-sim-reset">Reset</button>
-                </div>
                 <div id="storm-alert-list">
                     <div class="storm-alert-empty">No active storm alerts</div>
                 </div>
@@ -187,17 +177,18 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="/static/js/state.js?v=26"></script>
-    <script src="/static/js/location.js?v=26"></script>
-    <script src="/static/js/map.js?v=26"></script>
-    <script src="/static/js/radar-manager.js?v=26"></script>
-    <script src="/static/js/alert-renderer.js?v=26"></script>
-    <script src="/static/js/alert-panel.js?v=26"></script>
-    <script src="/static/js/storm-audio.js?v=26"></script>
-    <script src="/static/js/storm-notify.js?v=26"></script>
-    <script src="/static/js/storm-alert-panel.js?v=26"></script>
-    <script src="/static/js/validation.js?v=26"></script>
-    <script src="/static/js/app.js?v=26"></script>
+    <script src="/static/js/state.js?v=33"></script>
+    <script src="/static/js/location.js?v=33"></script>
+    <script src="/static/js/map.js?v=33"></script>
+    <script src="/static/js/radar-manager.js?v=33"></script>
+    <script src="/static/js/alert-renderer.js?v=33"></script>
+    <script src="/static/js/alert-panel.js?v=33"></script>
+    <script src="/static/js/storm-audio.js?v=33"></script>
+    <script src="/static/js/storm-notify.js?v=33"></script>
+    <script src="/static/js/storm-alert-panel.js?v=33"></script>
+    <script src="/static/js/feedback.js?v=33"></script>
+    <script src="/static/js/validation.js?v=33"></script>
+    <script src="/static/js/app.js?v=33"></script>
     <script>
         if ("serviceWorker" in navigator) {
             navigator.serviceWorker.register("/static/sw.js").catch(() => {});

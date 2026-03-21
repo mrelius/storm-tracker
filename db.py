@@ -46,6 +46,20 @@ CREATE INDEX IF NOT EXISTS idx_alerts_expires ON alerts(expires);
 CREATE INDEX IF NOT EXISTS idx_alerts_event ON alerts(event);
 CREATE INDEX IF NOT EXISTS idx_alerts_priority ON alerts(priority_score DESC);
 CREATE INDEX IF NOT EXISTS idx_alert_counties_fips ON alert_counties(county_fips);
+
+CREATE TABLE IF NOT EXISTS feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    message TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'other',
+    page_context TEXT,
+    user_agent TEXT,
+    status TEXT NOT NULL DEFAULT 'new',
+    notes TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status);
+CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback(created_at DESC);
 """
 
 _db_path: str | None = None

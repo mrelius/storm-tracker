@@ -15,36 +15,14 @@ const StormAlertPanel = (function () {
     let wsReconnectTimer = null;
     let lastAlertIds = "";
     let lastETAs = {};  // alertId → last displayed ETA
+    let prevAlertSet = {};  // alertId → last alert data (for expired transition)
+    let expiredAlerts = {};  // alertId → {alert, renderCount}
 
     function init() {
         fetchAndRender();
         pollTimer = setInterval(fetchAndRender, POLL_INTERVAL);
         connectWS();
         StormState.on("locationChanged", () => sendSubscribe());
-
-        // Simulation controls
-        const simSelect = document.getElementById("sim-scenario");
-        if (simSelect) {
-            simSelect.addEventListener("change", async () => {
-                const scenario = simSelect.value;
-                if (!scenario) return;
-                const loc = StormState.state.location;
-                const lat = loc.lat || 39.5;
-                const lon = loc.lon || -84.5;
-                await fetch(`/api/debug/simulate?scenario=${scenario}&lat=${lat}&lon=${lon}`);
-                simSelect.value = "";
-                showSimBanner(true);
-                fetchAndRender();
-            });
-        }
-        const simReset = document.getElementById("btn-sim-reset");
-        if (simReset) {
-            simReset.addEventListener("click", async () => {
-                await fetch("/api/debug/simulate/reset");
-                showSimBanner(false);
-                fetchAndRender();
-            });
-        }
     }
 
     function sendSubscribe() {
@@ -115,7 +93,8 @@ const StormAlertPanel = (function () {
             case "escalated":
                 if (msg.alert) {
                     StormAudio.evaluate(msg.type, msg.alert);
-                    StormNotify.evaluate(msg.type, msg.alert);
+                    // Backend is source of truth — pass notification payload if present
+                    StormNotify.evaluate(msg.type, msg.alert, msg.notification);
                 }
                 fetchAndRender();
                 break;
@@ -176,21 +155,43 @@ const StormAlertPanel = (function () {
         badge.textContent = alerts.length;
         badge.classList.toggle("badge-urgent", alerts.some(a => a.severity >= 3));
 
+        // Detect disappeared alerts → show brief expired transition
+        const currentIds = new Set(alerts.map(a => a.alert_id));
+        for (const id of Object.keys(prevAlertSet)) {
+            if (!currentIds.has(id) && !expiredAlerts[id]) {
+                expiredAlerts[id] = { alert: prevAlertSet[id], renderCount: 0 };
+            }
+        }
+        // Age out expired cards after 1 render cycle
+        for (const id of Object.keys(expiredAlerts)) {
+            expiredAlerts[id].renderCount++;
+            if (expiredAlerts[id].renderCount > 1) {
+                delete expiredAlerts[id];
+            }
+        }
+        // Update previous alert set
+        prevAlertSet = {};
+        for (const a of alerts) {
+            prevAlertSet[a.alert_id] = a;
+        }
+
         // Stable refresh: skip rerender if alert set unchanged
         const primaryId = primaryThreat ? primaryThreat.alert_id : "";
+        const expiredIds = Object.keys(expiredAlerts).sort().join(",");
         const newIds = alerts.map(a =>
-            `${a.alert_id}:${a.severity}:${a.status}:${confTier(a.confidence)}:${a.impact || ''}`
-        ).join(",") + "|" + primaryId;
+            `${a.alert_id}:${a.severity}:${a.status}:${confTier(a.confidence)}:${a.impact || ''}:${a.action_state || ''}:${a.lifecycle_state || ''}`
+        ).join(",") + "|" + primaryId + "|" + expiredIds;
         if (newIds === lastAlertIds) return;
         lastAlertIds = newIds;
 
-        if (alerts.length === 0) {
+        const hasExpired = Object.keys(expiredAlerts).length > 0;
+
+        if (alerts.length === 0 && !hasExpired) {
             const wsOk = ws && ws.readyState === WebSocket.OPEN;
             container.innerHTML = `<div class="storm-alert-empty">
                 <div class="sa-status-icon">&#9737;</div>
                 <div>No active severe weather</div>
                 <div class="sa-status-sub">System monitoring${wsOk ? " · Live" : ""}</div>
-                <button class="sa-test-btn" onclick="StormAlertPanel.testAlert()">Test Alert</button>
             </div>`;
             document.getElementById("storm-alert-section").classList.remove("has-critical");
             return;
@@ -199,10 +200,18 @@ const StormAlertPanel = (function () {
         const hasCritical = alerts.some(a => a.severity >= 3);
         document.getElementById("storm-alert-section").classList.toggle("has-critical", hasCritical);
 
-        const html = alerts.map((a, i) => {
+        // Build live cards
+        let html = alerts.map((a, i) => {
             const isPrimary = primaryThreat && a.alert_id === primaryThreat.alert_id;
             return buildCard(a, isPrimary);
         }).join("");
+
+        // Append brief expired transition cards
+        for (const id of Object.keys(expiredAlerts)) {
+            const ea = expiredAlerts[id].alert;
+            html += buildExpiredCard(ea);
+        }
+
         container.innerHTML = html;
         StormAudio.cleanup();
         StormNotify.cleanup();
@@ -223,53 +232,89 @@ const StormAlertPanel = (function () {
         const sevClass = severityClass(alert.severity);
         const conf = alert.confidence || 0;
         const tier = confTier(conf);
-        const confClass = `sa-conf-${tier}`;
+        // Debris overrides low-confidence visual treatment (dashed border, reduced opacity)
+        const confClass = (alert.type === "debris_signature" && tier === "low") ? "sa-conf-med" : `sa-conf-${tier}`;
         const primaryClass = isPrimary ? "sa-primary" : "";
 
-        // Status badge
+        // Status badge — lifecycle-driven, with escalated/new override
+        const lifecycle = alert.lifecycle_state || "active";
         let statusBadge = "";
         if (alert.status === "escalated") {
             statusBadge = '<span class="sa-badge sa-escalated">ESCALATED</span>';
         } else if (alert.status === "new") {
             statusBadge = '<span class="sa-badge sa-new">NEW</span>';
+        } else if (lifecycle === "forming") {
+            statusBadge = '<span class="sa-badge sa-developing">DEVELOPING</span>';
+        } else if (lifecycle === "weakening") {
+            statusBadge = '<span class="sa-badge sa-weakening">WEAKENING</span>';
         } else if (isPrimary) {
             statusBadge = '<span class="sa-badge sa-primary-badge">PRIMARY</span>';
-        } else if (tier === "low") {
-            statusBadge = '<span class="sa-badge sa-developing">DEVELOPING</span>';
         }
 
-        // Motion line: trend + direction + confidence qualifier
-        const motionText = formatMotion(alert);
+        // FIX 1: Message fallback — "Trajectory uncertain" is not actionable
+        const impactDesc = alert.impact_description || "";
+        const useImpactMsg = impactDesc && impactDesc !== "Trajectory uncertain";
 
-        // Distance + ETA + confidence
+        // Motion summary — compact, avoids duplicating primary message
+        const motionText = formatMotion(alert, useImpactMsg);
+
+        // Action state pill — hide "Monitoring" (default state, adds noise)
+        const actionState = alert.action_state || "monitor";
+        const actionPill = actionState !== "monitor" ? formatActionPill(actionState) : "";
+
+        // Distance + ETA
         const distText = alert.distance_mi != null ? `${Math.round(alert.distance_mi)} mi` : "";
-        const etaText = stabilizeETA(alert);
-        const confLevel = alert.confidence_level;
-        const confText = confLevel && confLevel !== "low" ? confLevel : "";
-        const metaParts = [distText, motionText, etaText, confText].filter(Boolean).join(" · ");
+        const confLevel = alert.confidence_level || "low";
+        // FIX 2: Suppress ETA from meta when already embedded in message text
+        const msgForEta = useImpactMsg ? impactDesc : (alert.message || "");
+        const etaInMessage = /\d+\s*min/.test(msgForEta);
+        let etaText = "";
+        if (confLevel !== "low" && !etaInMessage) {
+            etaText = stabilizeETA(alert);
+        }
 
-        // Freshness
-        const freshText = formatFreshness(alert.freshness);
+        // Primary meta: action + distance + ETA (the urgent scan line)
+        const primaryMeta = [actionPill, distText, etaText].filter(Boolean).join(" · ");
 
-        // Threat reason (primary only)
-        const reasonLine = isPrimary && alert.threat_reason
-            ? `<div class="sa-reason">${escapeHtml(alert.threat_reason)}</div>` : "";
+        // FIX 3: Debris confidence reframing — override low confidence for debris
+        const confReason = alert.confidence_reason || "";
+        const isDebris = alert.type === "debris_signature";
+        let confText = "";
+        if (isDebris) {
+            confText = "Debris confirmed";
+        } else if (confLevel !== "low") {
+            const cap = confLevel.charAt(0).toUpperCase() + confLevel.slice(1);
+            confText = confReason ? `${cap} · ${confReason}` : cap;
+        }
+        const secondaryMeta = [motionText, confText].filter(Boolean).join(" · ");
+
+        // Freshness — only show when stale (>60s)
+        const freshText = alert.freshness > 60 ? formatFreshness(alert.freshness) : "";
+
+        // Ranking context — primary reason or secondary contrast
+        let reasonLine = "";
+        if (isPrimary && alert.primary_reason) {
+            reasonLine = `<div class="sa-reason">${escapeHtml(alert.primary_reason)}</div>`;
+        } else if (!isPrimary && alert.secondary_context) {
+            reasonLine = `<div class="sa-secondary-context">${escapeHtml(alert.secondary_context)}</div>`;
+        }
 
         // Debug overlay (hidden by default, toggled with D key)
         const debugInfo = `<div class="sa-debug-info hidden">
             <span>#${alert.rank_position || '?'}</span>
             <span>threat:${alert.threat_score || '?'}</span>
             <span>impact:${alert.impact || '?'}</span>
-            <span>sev:${alert.impact_severity_label || '?'}</span>
-            <span>conf:${(alert.confidence || 0).toFixed(2)}</span>
-            ${alert.time_to_cpa_min ? `<span>cpa:${Math.round(alert.time_to_cpa_min)}m</span>` : ''}
+            <span>conf:${alert.confidence_level || '?'}[${alert.confidence_reason || '-'}]</span>
+            <span>tc:${(alert.track_confidence || 0).toFixed(2)} mc:${(alert.motion_confidence || 0).toFixed(2)}</span>
+            <span>rank:${alert.primary_reason || alert.secondary_context || '-'}</span>
+            <span>lifecycle:${alert.lifecycle_state || '?'}</span>
+            <span>action:${alert.action_state || '?'}[${alert.action_trigger || ''}]</span>
             ${alert.eta_min ? `<span>eta:${Math.round(alert.eta_min)}m</span>` : ''}
-            ${alert.eta_delta_sec != null ? `<span>ETA\u0394:${alert.eta_delta_sec}s</span>` : ''}
-            <span>conf:${alert.confidence_level || '?'}</span>
+            <span>dist:${alert.distance_mi || '?'} trend:${alert.trend || '?'}</span>
         </div>`;
 
-        // Use impact_description as primary message when available (more context)
-        const primaryMsg = alert.impact_description || alert.message || "";
+        // Primary message: use impact_description when meaningful, else base message
+        const primaryMsg = useImpactMsg ? impactDesc : (alert.message || "");
 
         return `<div class="storm-alert-card ${sevClass} ${confClass} ${primaryClass}" data-lat="${alert.lat}" data-lon="${alert.lon}" data-alert-id="${alert.alert_id || ''}">
             <div class="sa-header">
@@ -277,9 +322,22 @@ const StormAlertPanel = (function () {
                 ${statusBadge}
             </div>
             <div class="sa-message">${escapeHtml(primaryMsg)}</div>
-            ${metaParts ? `<div class="sa-meta">${metaParts}</div>` : ""}
+            ${reasonLine}
+            ${primaryMeta ? `<div class="sa-meta">${primaryMeta}</div>` : ""}
+            ${secondaryMeta ? `<div class="sa-meta sa-meta-secondary">${secondaryMeta}</div>` : ""}
             ${freshText ? `<div class="sa-freshness">${freshText}</div>` : ""}
             ${debugInfo}
+        </div>`;
+    }
+
+    function buildExpiredCard(alert) {
+        const sevClass = severityClass(alert.severity);
+        return `<div class="storm-alert-card ${sevClass} sa-expired">
+            <div class="sa-header">
+                <span class="sa-title">${escapeHtml(alert.title)}</span>
+                <span class="sa-badge sa-expired-badge">EXPIRED</span>
+            </div>
+            <div class="sa-message">No longer detected</div>
         </div>`;
     }
 
@@ -312,26 +370,35 @@ const StormAlertPanel = (function () {
         return `ETA ~${rounded}m`;
     }
 
-    function formatMotion(alert) {
-        // Impact-first wording when available
+    function formatActionPill(actionState) {
+        switch (actionState) {
+            case "take_action":
+                return '<span class="sa-action sa-action-act">Take action</span>';
+            case "be_ready":
+                return '<span class="sa-action sa-action-ready">Be ready</span>';
+            default:
+                return '<span class="sa-action sa-action-monitor">Monitoring</span>';
+        }
+    }
+
+    function formatMotion(alert, isPrimaryMsg) {
+        // If impact_description is already shown as primary message, use compact motion instead
         const impact = alert.impact;
         const impactDesc = alert.impact_description;
-        if (impact === "direct_hit" && impactDesc) return impactDesc;
-        if (impact === "near_miss" && impactDesc) return impactDesc;
-        if (impact === "passing" && impactDesc) return impactDesc;
+        if (!isPrimaryMsg && impactDesc && (impact === "direct_hit" || impact === "near_miss" || impact === "passing")) {
+            return impactDesc;
+        }
 
-        // Fallback to trend-based wording
+        // Compact trend-based motion summary
         const trend = alert.trend || "unknown";
         const dir = alert.direction && alert.direction !== "unknown" ? alert.direction : "";
-        const conf = alert.trend_confidence || 0;
         const speed = alert.speed_mph || 0;
-        const speedText = speed >= 5 ? ` at ${Math.round(speed)} mph` : "";
+        const speedText = speed >= 5 ? ` ${Math.round(speed)} mph` : "";
         const intensity = alert.intensity_trend;
 
         let text = "";
         if (trend === "closing") {
-            text = dir ? `Approaching from ${dir}${speedText}` : `Approaching${speedText}`;
-            if (conf < 0.3) text += ", developing";
+            text = dir ? `${dir}${speedText}` : `Approaching${speedText}`;
         } else if (trend === "departing") {
             text = `Moving away${speedText}`;
         } else {
@@ -386,22 +453,6 @@ const StormAlertPanel = (function () {
         return div.innerHTML;
     }
 
-    function showSimBanner(show) {
-        const el = document.getElementById("sim-banner");
-        if (el) el.classList.toggle("hidden", !show);
-    }
-
-    async function testAlert() {
-        try {
-            const loc = StormState.state.location;
-            const lat = loc.lat || 39.5;
-            const lon = loc.lon || -84.5;
-            await fetch(`/api/debug/simulate?scenario=direct_hit&lat=${lat}&lon=${lon}`);
-            fetchAndRender();
-        } catch (e) {
-            console.warn("Test alert failed:", e);
-        }
-    }
 
     // --- Debug Overlay ---
     let debugVisible = false;
@@ -420,5 +471,5 @@ const StormAlertPanel = (function () {
         }
     });
 
-    return { init, fetchAndRender, testAlert, toggleDebug };
+    return { init, fetchAndRender, toggleDebug };
 })();

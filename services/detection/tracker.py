@@ -15,7 +15,7 @@ MAX_HISTORY = 5           # position history entries per track
 EXPIRE_CYCLES = 3         # remove track after N missed cycles
 MIN_SPEED_MPH = 2.0       # below this, treat as stationary
 MAX_SPEED_MPH = 150.0      # above this, reject as bad data
-TREND_THRESHOLD_MI = 0.5   # distance change below this = no trend
+TREND_THRESHOLD_MI = 0.1   # distance change below this = no trend (supports 8s-60s cadence)
 
 
 @dataclass

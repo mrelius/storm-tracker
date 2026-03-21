@@ -48,6 +48,7 @@ class ClientContext:
 
     _state_tracker: object = field(default=None, repr=False)
     _notification_gate: object = field(default=None, repr=False)
+    _notification_engine: object = field(default=None, repr=False)
 
     def get_state_tracker(self):
         if self._state_tracker is None:
@@ -60,6 +61,12 @@ class ClientContext:
             from services.detection.intelligence import NotificationGate
             self._notification_gate = NotificationGate()
         return self._notification_gate
+
+    def get_notification_engine(self):
+        if self._notification_engine is None:
+            from services.detection.notifications import NotificationEngine
+            self._notification_engine = NotificationEngine()
+        return self._notification_engine
 
 
 class AlertWSManager:

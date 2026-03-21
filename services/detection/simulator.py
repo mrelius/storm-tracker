@@ -177,8 +177,10 @@ def _tracked_storm_step(step, lat, lon):
     Designed to build tracking history → produce real ETA.
     """
     # Start 20mi SW of user, move NE consistently
-    storm_lat = lat - 0.3 + step * 0.03
-    storm_lon = lon - 0.3 + step * 0.03
+    # 0.0016° per 8s step ≈ 0.11 mi/step ≈ 50 mph (realistic storm speed)
+    step_deg = 0.0016
+    storm_lat = lat - 0.3 + step * step_deg
+    storm_lon = lon - 0.3 + step * step_deg
     return [BaseStormCandidate(
         id="sim_tracked_1",
         lat=round(storm_lat, 4),

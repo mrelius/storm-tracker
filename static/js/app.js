@@ -26,6 +26,24 @@
         StormAudio.init();
         StormNotify.init();
         Validation.init(map);
+        Feedback.init();
+
+        // Header minimize toggle
+        const minBtn = document.getElementById("btn-minimize-header");
+        if (minBtn) {
+            if (localStorage.getItem("header_minimized") === "true") {
+                document.getElementById("app").classList.add("header-minimized");
+                minBtn.innerHTML = "&#9660;";
+                minBtn.title = "Expand header";
+            }
+            minBtn.addEventListener("click", () => {
+                const app = document.getElementById("app");
+                const minimized = app.classList.toggle("header-minimized");
+                localStorage.setItem("header_minimized", minimized);
+                minBtn.innerHTML = minimized ? "&#9660;" : "&#9650;";
+                minBtn.title = minimized ? "Expand header" : "Minimize header";
+            });
+        }
 
         // 3. Resolve location
         await StormLocation.resolve();

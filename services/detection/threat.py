@@ -124,6 +124,75 @@ def explain_score(alert: dict, score: float) -> str:
     return ", ".join(parts)
 
 
+def compute_primary_reason(alert: dict) -> str:
+    """Pick the single most human-relevant reason this alert ranks highest.
+
+    Priority-ordered selection from real signals — not raw math component max.
+    Returns a short 2-4 word phrase.
+    """
+    alert_type = alert.get("type", "")
+    impact = alert.get("impact", "uncertain")
+    distance = alert.get("distance_mi", 999)
+    trend = alert.get("trend", "unknown")
+    severity = alert.get("severity", 0)
+
+    # 1. Debris / strongest direct severe evidence
+    if alert_type == "debris_signature":
+        return "Debris detected"
+
+    # 2. Direct path / impact trajectory
+    if impact == "direct_hit":
+        return "Direct path"
+
+    # 3. Very close proximity
+    if distance < 5:
+        return "Very close"
+    if distance < 10:
+        return "Closest threat"
+
+    # 4. Clearly closing / approaching
+    if trend == "closing":
+        return "Approaching"
+
+    # 5. High severity / strongest signal
+    if alert_type == "rotation":
+        return "Rotation detected"
+    if severity >= 3:
+        return "High severity"
+
+    # 6. Fallback
+    return "Strongest signal"
+
+
+def compute_secondary_context(alert: dict, primary: dict) -> str:
+    """Return one short contrast reason versus the primary storm.
+
+    Picks the single most salient difference.
+    """
+    p_dist = primary.get("distance_mi", 999)
+    s_dist = alert.get("distance_mi", 999)
+    p_trend = primary.get("trend", "unknown")
+    s_trend = alert.get("trend", "unknown")
+    p_sev = primary.get("severity", 0)
+    s_sev = alert.get("severity", 0)
+    p_conf = primary.get("confidence_level", "low")
+    s_conf = alert.get("confidence_level", "low")
+
+    # Pick single most relevant contrast
+    if s_dist > p_dist + 5:
+        return "Farther away"
+    if s_sev < p_sev:
+        return "Weaker"
+    if p_trend == "closing" and s_trend != "closing":
+        return "Not approaching"
+    if p_conf in ("high", "medium") and s_conf == "low":
+        return "Lower confidence"
+    if s_dist > p_dist:
+        return "Farther away"
+
+    return ""
+
+
 def rank_alerts(alerts: list[dict]) -> dict:
     """Rank alerts by threat score and select primary threat.
 
@@ -149,11 +218,16 @@ def rank_alerts(alerts: list[dict]) -> dict:
     # Sort by score descending, then severity descending as tie-break
     scored.sort(key=lambda a: (-a["threat_score"], -a.get("severity", 0)))
 
-    # Add rank position
+    # Add rank position + primary reason + secondary context
+    primary = scored[0] if scored else None
     for i, a in enumerate(scored):
         a["rank_position"] = i + 1
-
-    primary = scored[0] if scored else None
+        if i == 0:
+            a["primary_reason"] = compute_primary_reason(a)
+            a["secondary_context"] = ""
+        else:
+            a["primary_reason"] = ""
+            a["secondary_context"] = compute_secondary_context(a, primary) if primary else ""
 
     return {
         "primary_threat": primary,

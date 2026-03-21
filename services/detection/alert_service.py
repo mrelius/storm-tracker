@@ -55,6 +55,22 @@ def get_snapshot() -> AlertSnapshot:
     return _snapshot
 
 
+def _update_snapshot(alerts, alerts_changed: int, alerts_expired: int, detections_processed: int):
+    """Update the HTTP snapshot from outside run_cycle_once (e.g. simulation inject)."""
+    global _snapshot
+    now = time.time()
+    _snapshot = AlertSnapshot(
+        alerts=alerts,
+        count=len(alerts),
+        updated_at=now,
+        detections_processed=detections_processed,
+        alerts_changed=alerts_changed,
+        alerts_expired=alerts_expired,
+        cycle_status="ok",
+        last_success=now,
+    )
+
+
 # --- History ---
 
 @dataclass
@@ -123,7 +139,7 @@ async def run_cycle_once(
         lon = ref_lon if ref_lon is not None else settings.default_lon
 
         try:
-            # 1. Global: refresh shared base candidates
+            # 1. Global: refresh shared base candidates (guarded internally during simulation)
             await refresh_base_candidates()
 
             # 2. Default: run detection + alert cycle for HTTP endpoint
@@ -140,6 +156,10 @@ async def run_cycle_once(
                 if alert.status == AlertStatus.expired:
                     if time.time() - alert.updated_at < 5:
                         record_history(alert, "expired")
+
+            # Cleanup lifecycle memory for alerts no longer active
+            active_ids = {a.alert_id for a in result["alerts"]}
+            _cleanup_lifecycle_memory(active_ids)
 
             # Update default snapshot (for HTTP endpoint)
             now = time.time()
@@ -194,26 +214,50 @@ async def _broadcast_per_client(manager, settings):
             ranked = ranker.rank(alert_dicts)
             filtered = filter_alerts(ranked["alerts"])
 
-            # Detect state changes
+            # Detect state changes (kept for compatibility)
             state_tracker = ctx.get_state_tracker()
-            changes = state_tracker.detect_changes(filtered)
+            state_tracker.detect_changes(filtered)
 
-            # Gate notifications — only send lifecycle events for meaningful changes
-            gate = ctx.get_notification_gate()
-            for alert in changed:
-                aid = alert.alert_id
-                alert_dict = _alert_to_dict(alert)
-                alert_changes = changes.get(aid, [])
+            # Notification intelligence — evaluate each alert through engine
+            engine = ctx.get_notification_engine()
+            primary_id = filtered[0].get("alert_id") if filtered else None
+            changed_ids = {a.alert_id for a in changed}
 
-                if alert.status == AlertStatus.new and gate.should_notify(alert_dict, alert_changes):
-                    await manager.send_to(ws, _alert_ws_payload("created", alert))
-                elif alert.status == AlertStatus.escalated and gate.should_notify(alert_dict, alert_changes):
-                    await manager.send_to(ws, _alert_ws_payload("escalated", alert))
+            for alert_dict in filtered:
+                aid = alert_dict.get("alert_id", "")
+                is_primary = aid == primary_id
+                is_new = aid in changed_ids
 
+                decision = engine.evaluate(
+                    alert=alert_dict,
+                    is_primary=is_primary,
+                    is_new=is_new,
+                )
+
+                if decision.notify:
+                    logger.debug(
+                        f"Notification: {decision.event_type} for {aid} — {decision.reason}"
+                    )
+                    ws_type = "escalated" if decision.event_type == "escalation" else "created"
+                    await manager.send_to(ws, {
+                        "type": ws_type,
+                        "alert": alert_dict,
+                        "notification": decision.payload,
+                        "updated_at": time.time(),
+                    })
+
+            # Handle expirations
             for alert in alert_store.get_all_alerts():
                 if alert.status == AlertStatus.expired:
                     if time.time() - alert.updated_at < 5:
-                        await manager.send_to(ws, _alert_ws_payload("expired", alert))
+                        alert_dict = _alert_to_dict(alert)
+                        decision = engine.evaluate(
+                            alert=alert_dict, is_primary=False, is_expired=True,
+                        )
+                        payload = {"type": "expired", "alert": alert_dict, "updated_at": time.time()}
+                        if decision.notify and decision.payload:
+                            payload["notification"] = decision.payload
+                        await manager.send_to(ws, payload)
 
             # Send filtered snapshot
             primary = filtered[0] if filtered else None
@@ -285,6 +329,154 @@ def build_client_snapshot(ctx: ClientContext) -> dict:
 _prev_etas: dict[str, float] = {}  # alert_id → previous eta_min
 
 
+def _compute_action_state(
+    alert_type: str,
+    confidence_level: str,
+    impact: str,
+    severity: int,
+    distance_mi: float,
+    trend: str,
+    eta_min: float | None,
+) -> tuple[str, str]:
+    """Determine user-facing action state from real system signals.
+
+    Priority-ordered, deterministic evaluation. Returns (action_state, trigger).
+
+    States: monitor, be_ready, take_action
+    """
+    closing = trend == "closing"
+    is_direct_hit = impact == "direct_hit"
+    has_eta = eta_min is not None and eta_min > 0
+
+    # --- 1. Hard override: debris signature (overwhelming evidence) ---
+    if alert_type == "debris_signature":
+        return ("take_action", "debris signature detected")
+
+    # --- 2. Confidence guard: low confidence caps escalation ---
+    if confidence_level == "low":
+        # Only exception: severe + very close = be_ready
+        if severity >= 3 and distance_mi < 10:
+            return ("be_ready", "severe nearby, low confidence")
+        return ("monitor", "low confidence")
+
+    # --- 3. High confidence + severe direct threat → take_action ---
+    if confidence_level == "high":
+        if severity >= 3 and is_direct_hit:
+            return ("take_action", "severe direct hit, high confidence")
+        if distance_mi < 5 and closing:
+            return ("take_action", "very close and closing")
+
+    # --- 4. Medium/high confidence credible approaching risk → be_ready ---
+    # confidence_level is "medium" or "high" here (low was handled above)
+    if closing and is_direct_hit:
+        return ("be_ready", "closing direct hit")
+    if has_eta and eta_min < 15 and closing:
+        return ("be_ready", "ETA under 15 min, closing")
+    if severity >= 3 and distance_mi < 15:
+        return ("be_ready", "severe within 15 mi")
+    if is_direct_hit:
+        return ("be_ready", "direct hit trajectory")
+
+    # --- 5. Default ---
+    return ("monitor", "no immediate action needed")
+
+
+# --- Lifecycle State ---
+
+# Forward-only order: forming(0) → active(1) → weakening(2)
+_LIFECYCLE_ORDER = {"forming": 0, "active": 1, "weakening": 2}
+
+# Per-alert lifecycle memory: alert_id → (current_state, consecutive_backward_count)
+_lifecycle_memory: dict[str, tuple[str, int]] = {}
+
+# Maturity threshold: track_confidence ≥ 0.5 and confidence_level not "low"
+_MATURITY_TC = 0.5
+
+
+def _compute_lifecycle_state(
+    alert_id: str,
+    confidence_level: str,
+    track_confidence: float,
+    intensity_trend: str,
+    trend: str,
+    severity: int,
+) -> tuple[str, str]:
+    """Determine lifecycle state for a live alert.
+
+    Priority-ordered, forward-progressive with anti-oscillation.
+    Returns (lifecycle_state, lifecycle_signal).
+
+    Live states only: forming, active, weakening.
+    Expired is handled client-side as a display transition.
+    """
+    prev_state, backward_count = _lifecycle_memory.get(alert_id, ("forming", 0))
+    prev_order = _LIFECYCLE_ORDER.get(prev_state, 0)
+
+    # 1. Determine maturity — enough confidence/tracking to be beyond "forming"
+    is_mature = track_confidence >= _MATURITY_TC and confidence_level != "low"
+
+    # 2. Determine weakening — only meaningful if previously mature
+    is_degrading = False
+    if prev_order >= 1:  # was active or weakening before
+        if intensity_trend == "weakening":
+            is_degrading = True
+        elif trend == "departing" and confidence_level != "low":
+            is_degrading = True
+
+    # 3. Classify
+    if not is_mature:
+        new_state = "forming"
+        signal = f"tc={track_confidence:.2f}, conf={confidence_level}"
+    elif is_degrading:
+        new_state = "weakening"
+        signal = f"intensity={intensity_trend}, trend={trend}"
+    else:
+        new_state = "active"
+        signal = "stable tracking"
+
+    # 4. Anti-oscillation: backward transitions require 2 consecutive evaluations
+    new_order = _LIFECYCLE_ORDER[new_state]
+    if new_order < prev_order:
+        # Backward transition attempt (e.g. weakening→active or active→forming)
+        if backward_count + 1 < 2:
+            # Hold previous state, increment counter
+            _lifecycle_memory[alert_id] = (prev_state, backward_count + 1)
+            return (prev_state, f"holding {prev_state} ({backward_count + 1}/2)")
+        # Counter met — allow backward transition
+    # Forward or same — reset counter
+    _lifecycle_memory[alert_id] = (new_state, 0)
+    return (new_state, signal)
+
+
+def _align_action_with_lifecycle(
+    action_state: str,
+    action_trigger: str,
+    lifecycle_state: str,
+    alert_type: str,
+) -> tuple[str, str]:
+    """Enforce alignment between lifecycle and action states.
+
+    - forming: ceiling = be_ready (never take_action unless debris)
+    - weakening: prefer ceiling = be_ready, unless overwhelming direct evidence
+    """
+    if lifecycle_state == "forming":
+        if action_state == "take_action" and alert_type != "debris_signature":
+            return ("be_ready", action_trigger + " (forming)")
+
+    if lifecycle_state == "weakening":
+        if action_state == "take_action" and alert_type != "debris_signature":
+            return ("be_ready", action_trigger + " (weakening)")
+
+    return (action_state, action_trigger)
+
+
+def _cleanup_lifecycle_memory(active_ids: set[str]):
+    """Remove lifecycle memory for alerts no longer active."""
+    stale = [aid for aid in _lifecycle_memory if aid not in active_ids]
+    for aid in stale:
+        del _lifecycle_memory[aid]
+
+
 def _alert_to_dict(alert: StormAlert) -> dict:
     """Canonical alert serialization — all fields explicit, no inference downstream."""
     now = time.time()
@@ -312,6 +504,46 @@ def _alert_to_dict(alert: StormAlert) -> dict:
     else:
         confidence_level = "low"
 
+    # Confidence reason — short human phrase explaining why
+    if tc < 0.25:
+        confidence_reason = "Limited data"
+    elif tc < 0.5 and mc < 0.3:
+        confidence_reason = "Inconsistent signal"
+    elif tc >= 0.5 and mc < 0.3:
+        confidence_reason = "Motion uncertain"
+    elif tc >= 0.75 and mc >= 0.5:
+        confidence_reason = "Tracking stable" if not has_eta else "Multiple confirmations"
+    elif tc >= 0.5 and mc >= 0.5 and has_eta:
+        confidence_reason = "Multiple confirmations"
+    else:
+        confidence_reason = ""
+
+    # Lifecycle state — forward-progressive, anti-oscillation
+    lifecycle_state, lifecycle_signal = _compute_lifecycle_state(
+        alert_id=alert.alert_id,
+        confidence_level=confidence_level,
+        track_confidence=tc,
+        intensity_trend=getattr(alert, "intensity_trend", "unknown"),
+        trend=alert.trend or "unknown",
+        severity=alert.severity,
+    )
+
+    # Action state — deterministic, priority-ordered
+    action_state, action_trigger = _compute_action_state(
+        alert_type=alert.type,
+        confidence_level=confidence_level,
+        impact=getattr(alert, "impact", "uncertain"),
+        severity=alert.severity,
+        distance_mi=alert.distance_mi or 999,
+        trend=alert.trend or "unknown",
+        eta_min=alert.eta_min,
+    )
+
+    # Align action with lifecycle — prevent contradictions
+    action_state, action_trigger = _align_action_with_lifecycle(
+        action_state, action_trigger, lifecycle_state, alert.type,
+    )
+
     return {
         # Identity
         "alert_id": alert.alert_id,
@@ -329,6 +561,7 @@ def _alert_to_dict(alert: StormAlert) -> dict:
         "freshness": round(now - alert.updated_at, 1),
         "eta_delta_sec": eta_delta,
         "confidence_level": confidence_level,
+        "confidence_reason": confidence_reason,
         # Location
         "lat": alert.lat,
         "lon": alert.lon,
@@ -361,6 +594,12 @@ def _alert_to_dict(alert: StormAlert) -> dict:
         "projected_severity_label": getattr(alert, "projected_severity_label", "unknown"),
         "impact_severity_label": getattr(alert, "impact_severity_label", "unknown"),
         "impact_severity_score": getattr(alert, "impact_severity_score", 0),
+        # Decision layer
+        "action_state": action_state,
+        "action_trigger": action_trigger,
+        # Lifecycle
+        "lifecycle_state": lifecycle_state,
+        "lifecycle_signal": lifecycle_signal,
     }
 
 
@@ -390,4 +629,6 @@ def reset_service():
         alerts_changed=0, alerts_expired=0, cycle_status="pending", last_success=0,
     )
     _history.clear()
+    _lifecycle_memory.clear()
+    _prev_etas.clear()
     get_store().clear()

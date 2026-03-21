@@ -19,7 +19,12 @@ class Settings(BaseSettings):
     alert_poll_interval: int = 60
     alert_history_capacity: int = 100
 
-    debug_mode: bool = True             # enables simulation endpoints
+    debug_mode: bool = False             # enables simulation endpoints (set DEBUG_MODE=true in .env for dev)
+
+    # Notification quiet hours (24h format, -1 = disabled)
+    # During quiet hours, only take_action and debris events notify
+    notification_quiet_start: int = -1   # e.g. 22 for 10 PM
+    notification_quiet_end: int = -1     # e.g. 6 for 6 AM
 
     log_level: str = "INFO"
 

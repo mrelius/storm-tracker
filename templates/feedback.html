@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Feedback Review — Storm Tracker</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #0a0e17; color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, sans-serif; padding: 20px; }
+        h1 { font-size: 18px; margin-bottom: 16px; color: #94a3b8; }
+        .controls { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+        select, button { background: #1a2235; border: 1px solid #2d3748; color: #e2e8f0; padding: 5px 10px; border-radius: 4px; font-size: 12px; cursor: pointer; }
+        button:hover { border-color: #3b82f6; }
+        .items { display: flex; flex-direction: column; gap: 8px; }
+        .item { background: #111827; border: 1px solid #2d3748; border-radius: 6px; padding: 10px 14px; border-left: 3px solid #3b82f6; }
+        .item-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; font-size: 11px; color: #64748b; }
+        .item-cat { background: #1e293b; padding: 1px 6px; border-radius: 3px; font-weight: 600; text-transform: uppercase; font-size: 9px; }
+        .item-msg { font-size: 13px; line-height: 1.5; white-space: pre-wrap; margin-bottom: 6px; }
+        .item-meta { font-size: 10px; color: #64748b; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        .item-meta select { font-size: 10px; padding: 2px 6px; }
+        .item-notes { margin-top: 4px; }
+        .item-notes input { background: #1a2235; border: 1px solid #2d3748; color: #e2e8f0; padding: 3px 6px; border-radius: 3px; font-size: 10px; width: 200px; }
+        .status-new { border-left-color: #3b82f6; }
+        .status-reviewed { border-left-color: #f59e0b; }
+        .status-planned { border-left-color: #22c55e; }
+        .status-done { border-left-color: #64748b; opacity: 0.6; }
+        .status-dismissed { border-left-color: #64748b; opacity: 0.4; }
+        .total { font-size: 11px; color: #64748b; }
+        .empty { text-align: center; padding: 40px; color: #64748b; }
+        a { color: #3b82f6; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <h1><a href="/">Storm Tracker</a> / Feedback Review</h1>
+    <div class="controls">
+        <select id="filter-status">
+            <option value="">All statuses</option>
+            <option value="new" selected>New</option>
+            <option value="reviewed">Reviewed</option>
+            <option value="planned">Planned</option>
+            <option value="done">Done</option>
+            <option value="dismissed">Dismissed</option>
+        </select>
+        <select id="filter-category">
+            <option value="">All categories</option>
+            <option value="bug">Bug</option>
+            <option value="idea">Idea</option>
+            <option value="improvement">Improvement</option>
+            <option value="confusion">Confusion</option>
+            <option value="other">Other</option>
+        </select>
+        <button onclick="loadFeedback()">Refresh</button>
+        <span id="total" class="total"></span>
+    </div>
+    <div id="items" class="items"></div>
+
+    <script>
+        async function loadFeedback() {
+            const status = document.getElementById("filter-status").value;
+            const category = document.getElementById("filter-category").value;
+            const params = new URLSearchParams();
+            if (status) params.set("status", status);
+            if (category) params.set("category", category);
+            params.set("limit", "100");
+
+            const resp = await fetch(`/api/feedback?${params}`);
+            const data = await resp.json();
+            document.getElementById("total").textContent = `${data.total} total`;
+
+            const container = document.getElementById("items");
+            if (!data.items.length) {
+                container.innerHTML = '<div class="empty">No feedback found</div>';
+                return;
+            }
+
+            container.innerHTML = data.items.map(item => `
+                <div class="item status-${item.status}" data-id="${item.id}">
+                    <div class="item-header">
+                        <span>${new Date(item.created_at).toLocaleString()}</span>
+                        <span class="item-cat">${esc(item.category)}</span>
+                    </div>
+                    <div class="item-msg">${esc(item.message)}</div>
+                    <div class="item-meta">
+                        <select onchange="updateStatus(${item.id}, this.value)">
+                            ${["new","reviewed","planned","done","dismissed"].map(s =>
+                                `<option value="${s}" ${s === item.status ? "selected" : ""}>${s}</option>`
+                            ).join("")}
+                        </select>
+                        <div class="item-notes">
+                            <input placeholder="Notes..." value="${esc(item.notes || '')}"
+                                   onchange="updateNotes(${item.id}, this.value)">
+                        </div>
+                        ${item.page_context ? `<span>page: ${esc(item.page_context)}</span>` : ""}
+                    </div>
+                </div>
+            `).join("");
+        }
+
+        async function updateStatus(id, status) {
+            await fetch(`/api/feedback/${id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ status }),
+            });
+        }
+
+        async function updateNotes(id, notes) {
+            await fetch(`/api/feedback/${id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ notes }),
+            });
+        }
+
+        function esc(s) {
+            if (!s) return "";
+            const d = document.createElement("div");
+            d.textContent = s;
+            return d.innerHTML;
+        }
+
+        document.getElementById("filter-status").addEventListener("change", loadFeedback);
+        document.getElementById("filter-category").addEventListener("change", loadFeedback);
+        loadFeedback();
+    </script>
+</body>
+</html>

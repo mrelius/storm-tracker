@@ -63,6 +63,7 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    transition: height 0.2s ease, padding 0.2s ease;
     padding: 0 16px;
     z-index: 1000;
     border-bottom: 1px solid var(--border);
@@ -130,6 +131,37 @@ html, body {
 
 #btn-toggle-panel:hover {
     background: var(--bg-card);
+}
+
+/* Header minimized state */
+.header-minimized #top-bar {
+    height: 28px;
+    padding: 0 12px;
+}
+
+.header-minimized #top-bar-center {
+    display: none;
+}
+
+.header-minimized .radar-info {
+    display: none;
+}
+
+.header-minimized #app-title {
+    font-size: 11px;
+}
+
+.header-minimized .badge {
+    display: none;
+}
+
+.header-minimized #alert-panel {
+    top: 28px;
+}
+
+.header-minimized #staleness-banner,
+.header-minimized #sim-banner {
+    top: 28px;
 }
 
 /* Radar Controls */
@@ -409,7 +441,7 @@ html, body {
     padding: 8px 10px;
     margin-bottom: 5px;
     cursor: pointer;
-    transition: background 0.15s;
+    transition: background 0.15s, opacity 0.3s, border-color 0.3s;
     border-left: 3px solid var(--border);
 }
 
@@ -470,12 +502,25 @@ html, body {
     margin-top: 2px;
 }
 
+.sa-secondary-context {
+    font-size: 9px;
+    color: var(--text-muted);
+    font-style: italic;
+    margin-top: 2px;
+    opacity: 0.7;
+}
+
 .sa-freshness {
     font-size: 8px;
     color: var(--text-muted);
     margin-top: 2px;
     font-family: monospace;
     opacity: 0.6;
+}
+
+/* Non-primary cards: slightly reduced when primary exists */
+.has-critical .storm-alert-card:not(.sa-primary) {
+    opacity: 0.85;
 }
 
 /* Primary threat enhanced block */
@@ -539,6 +584,64 @@ html, body {
     font-size: 10px;
     color: var(--text-muted);
     font-family: monospace;
+    margin-top: 2px;
+    line-height: 1.6;
+}
+
+.sa-meta-secondary {
+    opacity: 0.7;
+    font-family: inherit;
+    font-size: 9px;
+    margin-top: 1px;
+}
+
+/* Action state pills */
+.sa-action {
+    font-size: 9px;
+    font-weight: 600;
+    padding: 1px 4px;
+    border-radius: 3px;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+}
+
+.sa-action-monitor {
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+}
+
+.sa-action-ready {
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    background: rgba(245, 158, 11, 0.08);
+}
+
+.sa-action-act {
+    color: var(--tor-warn);
+    border: 1px solid rgba(255, 0, 0, 0.4);
+    background: rgba(255, 0, 0, 0.08);
+    font-weight: 700;
+}
+
+/* Lifecycle badges */
+.sa-weakening {
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+    font-size: 8px;
+}
+
+.sa-expired-badge {
+    background: var(--text-muted);
+    color: var(--bg-primary);
+    font-size: 8px;
+    opacity: 0.7;
+}
+
+/* Expired card — faded transitional display */
+.storm-alert-card.sa-expired {
+    opacity: 0.4;
+    border-left-style: dotted;
+    pointer-events: none;
 }
 
 /* Alert Side Panel */
@@ -1268,3 +1371,105 @@ html, body {
         right: 16px;
     }
 }
+
+/* Feedback Modal */
+.fb-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 2000;
+}
+
+.fb-panel {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    width: min(380px, 90vw);
+    z-index: 2001;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.fb-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.fb-close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 18px;
+    cursor: pointer;
+    padding: 0 4px;
+}
+
+.fb-body {
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.fb-select {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    padding: 5px 8px;
+    font-size: 12px;
+}
+
+.fb-textarea {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    padding: 8px;
+    font-size: 12px;
+    font-family: inherit;
+    resize: vertical;
+    min-height: 80px;
+}
+
+.fb-textarea:focus, .fb-select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.fb-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.fb-submit {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.fb-submit:hover { opacity: 0.9; }
+.fb-submit:disabled { opacity: 0.5; cursor: default; }
+
+.fb-status {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.fb-error { color: var(--tor-warn); }
+.fb-success { color: #22c55e; }

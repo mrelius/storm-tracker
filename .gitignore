@@ -6,5 +6,7 @@ data/storm_tracker.db
 data/storm_tracker.db-wal
 data/storm_tracker.db-shm
 data/smoke_test.db
+data/cc_tiles/
 .env
 .pytest_cache/
+*.log

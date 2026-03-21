@@ -21,7 +21,7 @@ from services.radar.rainviewer import RainViewerProvider
 from services.radar.iem import IEMRadarProvider
 from services.radar.nexrad_cc import NexradCCProvider
 from fastapi import WebSocket, WebSocketDisconnect
-from routers import alerts, radar, location, health, detections, storm_alerts
+from routers import alerts, radar, location, health, detections, storm_alerts, feedback
 
 settings = get_settings()
 logging.basicConfig(level=settings.log_level, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
@@ -94,6 +94,7 @@ app.include_router(location.router)
 app.include_router(health.router)
 app.include_router(detections.router)
 app.include_router(storm_alerts.router)
+app.include_router(feedback.router)
 
 _sim_last_call = 0
 _SIM_RATE_LIMIT = 5  # seconds between simulate calls
@@ -132,16 +133,20 @@ async def simulate_storm(scenario: str = "direct_hit", lat: float = 39.5, lon: f
             tracked = tracker.update(candidates)
             adapter._tracked_storms = tracked
             adapter._base_candidates = candidates
-            # Run per-client broadcast WITHOUT refresh_base_candidates (would wipe sim data)
-            from services.detection.alert_service import _broadcast_per_client
-            from services.detection.alert_engine import get_store, run_alert_cycle
-            from services.detection.ws_manager import get_ws_manager as _gwm
             # Run detection for default path
             from services.detection.adapter import evaluate_for_client, get_pipeline
-            det = evaluate_for_client(lat, lon, get_pipeline())
+            from services.detection.alert_engine import get_store
+            from services.detection.alert_service import _broadcast_per_client, _update_snapshot
+            from services.detection.ws_manager import get_ws_manager as _gwm
+            pipeline = get_pipeline()
+            pipeline.state.clear()  # Reset cooldown so sim steps re-emit with updated motion
+            det = evaluate_for_client(lat, lon, pipeline)
             store = get_store()
-            store.update_from_detections(det.events)
-            store.expire_stale()
+            changed = store.update_from_detections(det.events)
+            expired = store.expire_stale()
+            active = store.get_active_alerts()
+            # Update HTTP snapshot so /api/storm-alerts reflects sim data
+            _update_snapshot(active, len(changed), expired, det.storms_processed)
             # Broadcast to WS clients
             mgr = _gwm()
             if mgr.client_count > 0:
@@ -167,10 +172,15 @@ async def simulate_storm(scenario: str = "direct_hit", lat: float = 39.5, lon: f
     # Run detection directly (skip NWS refresh which would wipe sim data)
     from services.detection.adapter import evaluate_for_client, get_pipeline
     from services.detection.alert_engine import get_store
-    det = evaluate_for_client(lat, lon, get_pipeline())
+    from services.detection.alert_service import _update_snapshot
+    pipeline = get_pipeline()
+    pipeline.state.clear()
+    det = evaluate_for_client(lat, lon, pipeline)
     store = get_store()
-    store.update_from_detections(det.events)
-    store.expire_stale()
+    changed = store.update_from_detections(det.events)
+    expired = store.expire_stale()
+    active = store.get_active_alerts()
+    _update_snapshot(active, len(changed), expired, det.storms_processed)
 
     return {
         "scenario": scenario, "type": "instant",
@@ -199,6 +209,7 @@ async def reset_simulation():
         ctx.get_threat_ranker().reset()
         ctx.get_state_tracker().clear()
         ctx.get_notification_gate().clear()
+        ctx.get_notification_engine().clear()
     # Clear global snapshot
     from services.detection.alert_service import reset_service
     reset_service()
@@ -209,25 +220,23 @@ async def reset_simulation():
 async def debug_features():
     """Show active feature phases and system version."""
     return {
-        "version": "2.0.0-phase20",
+        "version": "3.0.0",
         "phases": {
             "1-4": "detection engine + frontend",
             "5": "background polling + history",
             "6": "websocket push",
-            "7": "audio notifications",
-            "8": "browser notifications",
-            "9": "per-client location",
-            "10": "client-relative detection",
-            "11": "storm persistence + tracking",
-            "12": "confidence + signal quality",
-            "13": "UI truthfulness + ETA stability",
-            "14": "threat prioritization",
-            "15": "canonical alert schema",
-            "16": "motion + freshness UI",
-            "17": "intensity trend + heading fix",
-            "18": "smoothing + prediction",
-            "19": "impact prediction (CPA)",
-            "20": "storm footprint + severity projection",
+            "7-8": "audio + browser notifications",
+            "9-10": "per-client location + detection",
+            "11-12": "storm tracking + confidence",
+            "13-15": "UI truthfulness + prioritization + schema",
+            "16-20": "motion, prediction, impact, footprint",
+            "21-25": "geographic context, noise reduction, ETA",
+            "26": "action state (decision layer)",
+            "27": "lifecycle clarity",
+            "28": "multi-storm prioritization",
+            "29": "confidence UX / trust calibration",
+            "30-32": "UX polish + trust gap corrections",
+            "33": "notification intelligence",
         },
         "alert_schema_fields": [
             "trend", "speed_mph", "heading_deg", "intensity_trend",
@@ -291,6 +300,11 @@ templates = Jinja2Templates(directory="templates")
 @app.get("/")
 async def root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
+
+
+@app.get("/feedback")
+async def feedback_review(request: Request):
+    return templates.TemplateResponse("feedback.html", {"request": request})
 
 
 @app.get("/proxy/rainviewer/{path:path}")
