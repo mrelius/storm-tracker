@@ -303,8 +303,15 @@ html, body {
     opacity: 1;
 }
 
-.sound-toggle.sound-off {
+.sound-toggle.sound-off,
+.sound-toggle.notify-off {
     opacity: 0.4;
+}
+
+.sound-toggle.notify-unsupported,
+.sound-toggle.notify-denied {
+    opacity: 0.3;
+    cursor: not-allowed;
 }
 
 .storm-alert-empty {

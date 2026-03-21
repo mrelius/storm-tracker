@@ -75,9 +75,9 @@ const StormAlertPanel = (function () {
                 break;
             case "created":
             case "escalated":
-                // Evaluate for audio BEFORE rendering (uses event data directly)
                 if (msg.alert) {
                     StormAudio.evaluate(msg.type, msg.alert);
+                    StormNotify.evaluate(msg.type, msg.alert);
                 }
                 fetchAndRender();
                 break;
@@ -154,6 +154,7 @@ const StormAlertPanel = (function () {
 
         container.innerHTML = alerts.map(buildCard).join("");
         StormAudio.cleanup();
+        StormNotify.cleanup();
 
         container.querySelectorAll(".storm-alert-card").forEach(card => {
             card.addEventListener("click", () => {

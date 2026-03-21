@@ -24,6 +24,7 @@
         AlertPanel.init();
         StormAlertPanel.init();
         StormAudio.init();
+        StormNotify.init();
         Validation.init(map);
 
         // 3. Resolve location
