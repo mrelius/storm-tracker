@@ -18,6 +18,7 @@ from services.detection.alert_engine import (
     get_store, run_alert_cycle, format_message,
 )
 from services.detection.threat import ThreatRanker
+from services.detection.intelligence import filter_alerts, StateTracker, NotificationGate
 from services.detection.adapter import refresh_base_candidates, evaluate_for_client
 from services.detection.geometry import haversine_mi, compute_bearing, bearing_to_direction
 from services.detection.models import DetectionType
@@ -187,11 +188,26 @@ async def _broadcast_per_client(manager, settings):
             expired = alert_store.expire_stale()
             active = alert_store.get_active_alerts()
 
-            # Send lifecycle events for this client
+            # Rank + filter alerts
+            alert_dicts = [_alert_to_dict(a) for a in active]
+            ranker = ctx.get_threat_ranker()
+            ranked = ranker.rank(alert_dicts)
+            filtered = filter_alerts(ranked["alerts"])
+
+            # Detect state changes
+            state_tracker = ctx.get_state_tracker()
+            changes = state_tracker.detect_changes(filtered)
+
+            # Gate notifications — only send lifecycle events for meaningful changes
+            gate = ctx.get_notification_gate()
             for alert in changed:
-                if alert.status == AlertStatus.new:
+                aid = alert.alert_id
+                alert_dict = _alert_to_dict(alert)
+                alert_changes = changes.get(aid, [])
+
+                if alert.status == AlertStatus.new and gate.should_notify(alert_dict, alert_changes):
                     await manager.send_to(ws, _alert_ws_payload("created", alert))
-                elif alert.status == AlertStatus.escalated:
+                elif alert.status == AlertStatus.escalated and gate.should_notify(alert_dict, alert_changes):
                     await manager.send_to(ws, _alert_ws_payload("escalated", alert))
 
             for alert in alert_store.get_all_alerts():
@@ -199,17 +215,13 @@ async def _broadcast_per_client(manager, settings):
                     if time.time() - alert.updated_at < 5:
                         await manager.send_to(ws, _alert_ws_payload("expired", alert))
 
-            # Rank alerts by threat score
-            alert_dicts = [_alert_to_dict(a) for a in active]
-            ranker = ctx.get_threat_ranker()
-            ranked = ranker.rank(alert_dicts)
-
-            # Send client-specific snapshot with ranking
+            # Send filtered snapshot
+            primary = filtered[0] if filtered else None
             snapshot_msg = {
                 "type": "snapshot",
-                "primary_threat": ranked["primary_threat"],
-                "alerts": ranked["alerts"],
-                "count": ranked["count"],
+                "primary_threat": primary,
+                "alerts": filtered,
+                "count": len(filtered),
                 "updated_at": time.time(),
                 "cycle_status": "ok",
                 "location_source": loc_source,

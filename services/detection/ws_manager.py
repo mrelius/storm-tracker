@@ -46,6 +46,21 @@ class ClientContext:
             self._threat_ranker = ThreatRanker()
         return self._threat_ranker
 
+    _state_tracker: object = field(default=None, repr=False)
+    _notification_gate: object = field(default=None, repr=False)
+
+    def get_state_tracker(self):
+        if self._state_tracker is None:
+            from services.detection.intelligence import StateTracker
+            self._state_tracker = StateTracker()
+        return self._state_tracker
+
+    def get_notification_gate(self):
+        if self._notification_gate is None:
+            from services.detection.intelligence import NotificationGate
+            self._notification_gate = NotificationGate()
+        return self._notification_gate
+
 
 class AlertWSManager:
     """Manages WebSocket connections with per-client location context."""

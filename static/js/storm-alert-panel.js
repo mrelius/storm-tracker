@@ -160,7 +160,7 @@ const StormAlertPanel = (function () {
         // Stable refresh: skip rerender if alert set unchanged
         const primaryId = primaryThreat ? primaryThreat.alert_id : "";
         const newIds = alerts.map(a =>
-            `${a.alert_id}:${a.severity}:${a.status}:${confTier(a.confidence)}`
+            `${a.alert_id}:${a.severity}:${a.status}:${confTier(a.confidence)}:${a.impact || ''}`
         ).join(",") + "|" + primaryId;
         if (newIds === lastAlertIds) return;
         lastAlertIds = newIds;
