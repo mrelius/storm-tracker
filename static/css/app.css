@@ -983,7 +983,7 @@ html, body {
 /* Radar Error/Retry */
 .radar-error {
     position: absolute;
-    bottom: 70px;
+    bottom: 90px;
     left: 16px;
     z-index: 1000;
     background: rgba(239, 68, 68, 0.15);
