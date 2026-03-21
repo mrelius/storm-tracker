@@ -242,6 +242,126 @@ html, body {
     50% { opacity: 0.4; }
 }
 
+/* Storm Alert Section (Detection Engine) */
+#storm-alert-section {
+    border-bottom: 1px solid var(--border);
+    padding: 8px;
+}
+
+#storm-alert-section.has-critical {
+    border-bottom-color: var(--tor-warn);
+}
+
+.sa-section-header {
+    padding: 4px 4px 6px 4px;
+}
+
+.sa-section-header h3 {
+    font-size: 13px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.badge-urgent {
+    background: var(--tor-warn) !important;
+    animation: pulse 1.2s ease-in-out infinite;
+}
+
+.storm-alert-empty {
+    text-align: center;
+    padding: 12px;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.storm-alert-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 5px;
+    cursor: pointer;
+    transition: background 0.15s;
+    border-left: 3px solid var(--border);
+}
+
+.storm-alert-card:hover {
+    background: rgba(26, 34, 53, 0.8);
+}
+
+/* Severity visual hierarchy */
+.storm-alert-card.sa-sev-1 {
+    border-left-color: var(--info);
+}
+
+.storm-alert-card.sa-sev-2 {
+    border-left-color: var(--tor-watch);
+}
+
+.storm-alert-card.sa-sev-3 {
+    border-left-color: var(--tor-warn);
+    background: rgba(255, 0, 0, 0.05);
+}
+
+.storm-alert-card.sa-sev-4 {
+    border-left-color: var(--tor-warn);
+    background: rgba(255, 0, 0, 0.1);
+    border-left-width: 4px;
+}
+
+.sa-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 3px;
+}
+
+.sa-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.sa-sev-1 .sa-title { color: var(--info); }
+.sa-sev-2 .sa-title { color: var(--tor-watch); }
+.sa-sev-3 .sa-title { color: var(--tor-warn); }
+.sa-sev-4 .sa-title { color: var(--tor-warn); font-size: 13px; }
+
+.sa-badge {
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 3px;
+    letter-spacing: 0.5px;
+}
+
+.sa-new {
+    background: var(--accent);
+    color: white;
+}
+
+.sa-escalated {
+    background: var(--tor-warn);
+    color: white;
+    animation: pulse 1.5s ease-in-out 3;
+}
+
+.sa-message {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    margin-bottom: 2px;
+}
+
+.sa-meta {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-family: monospace;
+}
+
 /* Alert Side Panel */
 #alert-panel {
     position: absolute;

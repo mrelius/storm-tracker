@@ -134,8 +134,18 @@
 
         <!-- Alert Side Panel -->
         <div id="alert-panel" class="panel-open">
+            <!-- Storm Alerts (Detection Engine) -->
+            <div id="storm-alert-section">
+                <div class="sa-section-header">
+                    <h3>Storm Alerts <span id="storm-alert-count" class="badge">0</span></h3>
+                </div>
+                <div id="storm-alert-list">
+                    <div class="storm-alert-empty">No active storm alerts</div>
+                </div>
+            </div>
+
             <div id="panel-header">
-                <h2>Active Alerts <span id="alert-count" class="badge">0</span></h2>
+                <h2>NWS Alerts <span id="alert-count" class="badge">0</span></h2>
                 <div id="sort-controls">
                     <label>Sort:</label>
                     <select id="sort-field">
@@ -171,6 +181,7 @@
     <script src="/static/js/radar-manager.js"></script>
     <script src="/static/js/alert-renderer.js"></script>
     <script src="/static/js/alert-panel.js"></script>
+    <script src="/static/js/storm-alert-panel.js"></script>
     <script src="/static/js/validation.js"></script>
     <script src="/static/js/app.js"></script>
     <script>

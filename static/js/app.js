@@ -22,6 +22,7 @@
         RadarManager.init(map);
         AlertRenderer.init(map);
         AlertPanel.init();
+        StormAlertPanel.init();
         Validation.init(map);
 
         // 3. Resolve location
