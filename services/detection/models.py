@@ -41,7 +41,11 @@ class StormObject:
     cc_min: Optional[float] = None
     trend: Trend = Trend.unknown
     heading_deg: float = 0.0           # storm travel direction (0=N, 90=E)
-    intensity_trend: str = "unknown"   # strengthening, weakening, stable, unknown
+    smoothed_heading: float = 0.0     # smoothed travel direction
+    intensity_trend: str = "unknown"
+    predicted_lat: float = 0.0
+    predicted_lon: float = 0.0
+    prediction_minutes: float = 0.0
     track_confidence: float = 0.0
     motion_confidence: float = 0.0
     trend_confidence: float = 0.0

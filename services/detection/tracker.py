@@ -37,7 +37,13 @@ class StormTrack:
     cc_min: float | None = None
     prev_reflectivity_dbz: float | None = None
     prev_velocity_delta: float | None = None
-    intensity_trend: str = "unknown"  # strengthening, weakening, stable, unknown
+    recent_dbz: list[float] = field(default_factory=list)
+    recent_velocity: list[float] = field(default_factory=list)
+    intensity_trend: str = "unknown"
+    smoothed_heading: float = 0.0
+    predicted_lat: float = 0.0
+    predicted_lon: float = 0.0
+    prediction_minutes: float = 0.0
     nws_event: str = ""
     nws_severity: str = ""
 
@@ -131,6 +137,8 @@ class StormTracker:
                 reflectivity_dbz=c.reflectivity_dbz,
                 velocity_delta=c.velocity_delta,
                 cc_min=c.cc_min,
+                recent_dbz=[c.reflectivity_dbz] if c.reflectivity_dbz is not None else [],
+                recent_velocity=[c.velocity_delta] if c.velocity_delta is not None else [],
                 nws_event=c.nws_event,
                 nws_severity=c.nws_severity,
             )
@@ -158,7 +166,8 @@ class StormTracker:
         self._next_id = 1
 
 
-MAX_RECENT = 3  # how many recent speeds/headings to keep
+MAX_RECENT = 5  # how many recent values to keep for smoothing
+PREDICTION_MINUTES = 10  # forward projection horizon
 
 
 def _compute_motion(track: StormTrack):
@@ -211,6 +220,12 @@ def _compute_motion(track: StormTrack):
 
     # Smoothed speed: simple average of recent
     track.smoothed_speed = round(sum(track.recent_speeds) / len(track.recent_speeds), 1)
+
+    # Smoothed heading: circular mean of recent headings
+    track.smoothed_heading = _circular_mean(track.recent_headings)
+
+    # Prediction: project position forward using smoothed speed + heading
+    _compute_prediction(track)
 
     _compute_confidence(track)
 
@@ -267,21 +282,74 @@ def _compute_confidence(track: StormTrack):
     )
 
 
+def _circular_mean(angles: list[float]) -> float:
+    """Compute circular mean of angles in degrees. Handles wrap-around correctly."""
+    if not angles:
+        return 0.0
+    sin_sum = sum(math.sin(math.radians(a)) for a in angles)
+    cos_sum = sum(math.cos(math.radians(a)) for a in angles)
+    mean = math.degrees(math.atan2(sin_sum, cos_sum))
+    return round(mean % 360, 1)
+
+
+def _compute_prediction(track: StormTrack):
+    """Project storm position forward using smoothed speed and heading.
+
+    Only predicts when motion_confidence is sufficient and speed is meaningful.
+    """
+    if track.smoothed_speed < MIN_SPEED_MPH or track.motion_confidence < 0.3:
+        track.predicted_lat = track.lat
+        track.predicted_lon = track.lon
+        track.prediction_minutes = 0
+        return
+
+    # Distance to travel in PREDICTION_MINUTES
+    dist_mi = track.smoothed_speed * (PREDICTION_MINUTES / 60.0)
+
+    # Convert heading to lat/lon offset
+    heading_rad = math.radians(track.smoothed_heading)
+    # Approximate: 1 degree lat ≈ 69 miles, 1 degree lon ≈ 69 * cos(lat)
+    lat_offset = (dist_mi * math.cos(heading_rad)) / 69.0
+    cos_lat = math.cos(math.radians(track.lat)) if track.lat != 0 else 1
+    lon_offset = (dist_mi * math.sin(heading_rad)) / (69.0 * max(cos_lat, 0.01))
+
+    track.predicted_lat = round(track.lat + lat_offset, 6)
+    track.predicted_lon = round(track.lon + lon_offset, 6)
+    track.prediction_minutes = PREDICTION_MINUTES
+
+
 def _compute_intensity_trend(track: StormTrack):
     """Compute whether the storm is strengthening, weakening, or stable.
 
-    Compares current vs previous reflectivity/velocity.
-    Threshold: 5 dBZ change or 10 kt velocity change.
+    Uses history of dbz/velocity values (last 3-5 frames) for sustained trend.
+    Single-frame jitter is filtered out.
     """
-    if track.prev_reflectivity_dbz is None or track.reflectivity_dbz is None:
+    # Record current values in history
+    if track.reflectivity_dbz is not None:
+        track.recent_dbz.append(track.reflectivity_dbz)
+        if len(track.recent_dbz) > MAX_RECENT:
+            track.recent_dbz = track.recent_dbz[-MAX_RECENT:]
+
+    if track.velocity_delta is not None:
+        track.recent_velocity.append(track.velocity_delta)
+        if len(track.recent_velocity) > MAX_RECENT:
+            track.recent_velocity = track.recent_velocity[-MAX_RECENT:]
+
+    # Need at least 2 values to determine trend
+    if len(track.recent_dbz) < 2:
         track.intensity_trend = "unknown"
         return
 
-    dbz_delta = (track.reflectivity_dbz or 0) - (track.prev_reflectivity_dbz or 0)
-    vel_delta = 0
-    if track.velocity_delta is not None and track.prev_velocity_delta is not None:
-        vel_delta = track.velocity_delta - track.prev_velocity_delta
+    # Check sustained direction: compare first vs last in window
+    dbz_first = track.recent_dbz[0]
+    dbz_last = track.recent_dbz[-1]
+    dbz_delta = dbz_last - dbz_first
 
+    vel_delta = 0
+    if len(track.recent_velocity) >= 2:
+        vel_delta = track.recent_velocity[-1] - track.recent_velocity[0]
+
+    # Sustained threshold: 5 dBZ or 10 kt over the window
     if dbz_delta >= 5 or vel_delta >= 10:
         track.intensity_trend = "strengthening"
     elif dbz_delta <= -5 or vel_delta <= -10:

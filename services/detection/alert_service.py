@@ -306,7 +306,11 @@ def _alert_to_dict(alert: StormAlert) -> dict:
         "motion_confidence": alert.motion_confidence,
         "trend_confidence": alert.trend_confidence,
         # Intensity
-        "intensity_trend": alert.intensity_trend,
+        "intensity_trend": getattr(alert, "intensity_trend", "unknown"),
+        # Prediction
+        "predicted_lat": getattr(alert, "predicted_lat", 0),
+        "predicted_lon": getattr(alert, "predicted_lon", 0),
+        "prediction_minutes": getattr(alert, "prediction_minutes", 0),
     }
 
 
