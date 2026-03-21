@@ -16,8 +16,10 @@ class Settings(BaseSettings):
     default_lon: float = -84.5
     default_location_name: str = "Ohio Valley"
 
-    alert_poll_interval: int = 60       # seconds between detection/alert cycles
-    alert_history_capacity: int = 100   # max recent history entries
+    alert_poll_interval: int = 60
+    alert_history_capacity: int = 100
+
+    debug_mode: bool = True             # enables simulation endpoints
 
     log_level: str = "INFO"
 

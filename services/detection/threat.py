@@ -149,6 +149,10 @@ def rank_alerts(alerts: list[dict]) -> dict:
     # Sort by score descending, then severity descending as tie-break
     scored.sort(key=lambda a: (-a["threat_score"], -a.get("severity", 0)))
 
+    # Add rank position
+    for i, a in enumerate(scored):
+        a["rank_position"] = i + 1
+
     primary = scored[0] if scored else None
 
     return {

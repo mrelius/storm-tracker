@@ -33,6 +33,7 @@ const StormAlertPanel = (function () {
                 const lon = loc.lon || -84.5;
                 await fetch(`/api/debug/simulate?scenario=${scenario}&lat=${lat}&lon=${lon}`);
                 simSelect.value = "";
+                showSimBanner(true);
                 fetchAndRender();
             });
         }
@@ -40,6 +41,7 @@ const StormAlertPanel = (function () {
         if (simReset) {
             simReset.addEventListener("click", async () => {
                 await fetch("/api/debug/simulate/reset");
+                showSimBanner(false);
                 fetchAndRender();
             });
         }
@@ -253,6 +255,7 @@ const StormAlertPanel = (function () {
 
         // Debug overlay (hidden by default, toggled with D key)
         const debugInfo = `<div class="sa-debug-info hidden">
+            <span>#${alert.rank_position || '?'}</span>
             <span>threat:${alert.threat_score || '?'}</span>
             <span>impact:${alert.impact || '?'}</span>
             <span>sev:${alert.impact_severity_label || '?'}</span>
@@ -376,7 +379,11 @@ const StormAlertPanel = (function () {
         return div.innerHTML;
     }
 
-    // --- Test Alert ---
+    function showSimBanner(show) {
+        const el = document.getElementById("sim-banner");
+        if (el) el.classList.toggle("hidden", !show);
+    }
+
     async function testAlert() {
         try {
             const loc = StormState.state.location;

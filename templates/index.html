@@ -6,7 +6,7 @@
     <title>Storm Tracker</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="stylesheet" href="/static/css/app.css?v=23" />
+    <link rel="stylesheet" href="/static/css/app.css?v=24" />
 </head>
 <body>
     <div id="app">
@@ -15,6 +15,7 @@
 
         <!-- Staleness Warning Banner -->
         <div id="staleness-banner" class="staleness-banner hidden"></div>
+        <div id="sim-banner" class="sim-banner hidden">SIMULATION MODE — NOT LIVE DATA</div>
 
         <!-- Top Bar -->
         <div id="top-bar">
@@ -186,17 +187,17 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="/static/js/state.js?v=23"></script>
-    <script src="/static/js/location.js?v=23"></script>
-    <script src="/static/js/map.js?v=23"></script>
-    <script src="/static/js/radar-manager.js?v=23"></script>
-    <script src="/static/js/alert-renderer.js?v=23"></script>
-    <script src="/static/js/alert-panel.js?v=23"></script>
-    <script src="/static/js/storm-audio.js?v=23"></script>
-    <script src="/static/js/storm-notify.js?v=23"></script>
-    <script src="/static/js/storm-alert-panel.js?v=23"></script>
-    <script src="/static/js/validation.js?v=23"></script>
-    <script src="/static/js/app.js?v=23"></script>
+    <script src="/static/js/state.js?v=24"></script>
+    <script src="/static/js/location.js?v=24"></script>
+    <script src="/static/js/map.js?v=24"></script>
+    <script src="/static/js/radar-manager.js?v=24"></script>
+    <script src="/static/js/alert-renderer.js?v=24"></script>
+    <script src="/static/js/alert-panel.js?v=24"></script>
+    <script src="/static/js/storm-audio.js?v=24"></script>
+    <script src="/static/js/storm-notify.js?v=24"></script>
+    <script src="/static/js/storm-alert-panel.js?v=24"></script>
+    <script src="/static/js/validation.js?v=24"></script>
+    <script src="/static/js/app.js?v=24"></script>
     <script>
         if ("serviceWorker" in navigator) {
             navigator.serviceWorker.register("/static/sw.js").catch(() => {});

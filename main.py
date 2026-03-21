@@ -95,38 +95,68 @@ app.include_router(health.router)
 app.include_router(detections.router)
 app.include_router(storm_alerts.router)
 
+_sim_last_call = 0
+_SIM_RATE_LIMIT = 5  # seconds between simulate calls
+
+
 @app.get("/api/debug/simulate")
 async def simulate_storm(scenario: str = "direct_hit", lat: float = 39.5, lon: float = -84.5):
-    """Inject synthetic storms into the real detection pipeline.
-
-    Scenarios: direct_hit, near_miss, multi_storm, escalation
-    """
-    from services.detection.simulator import get_scenario_candidates, list_scenarios
-    from services.detection.adapter import _base_candidates, _tracked_storms, get_tracker
+    """Inject synthetic storms into the real detection pipeline."""
+    global _sim_last_call
+    from services.detection.simulator import (
+        get_scenario_candidates, list_scenarios, TIMED_SCENARIOS,
+        run_timed_scenario, set_active_task, set_simulation_active,
+    )
+    from services.detection.adapter import get_tracker
     from services.detection.alert_service import run_cycle_once
     import services.detection.adapter as adapter
+
+    if not settings.debug_mode:
+        return {"error": "Simulation disabled. Set DEBUG_MODE=true."}
 
     if scenario == "list":
         return {"scenarios": list_scenarios()}
 
+    # Rate limit
+    now = time.time()
+    if now - _sim_last_call < _SIM_RATE_LIMIT:
+        return {"error": f"Rate limited. Wait {_SIM_RATE_LIMIT}s between calls."}
+    _sim_last_call = now
+
+    # Timed scenario
+    if scenario in TIMED_SCENARIOS:
+        set_simulation_active(True)
+
+        async def inject(candidates):
+            tracker = get_tracker()
+            tracked = tracker.update(candidates)
+            adapter._tracked_storms = tracked
+            adapter._base_candidates = candidates
+            await run_cycle_once(ref_lat=lat, ref_lon=lon)
+
+        task = asyncio.create_task(run_timed_scenario(scenario, lat, lon, inject))
+        set_active_task(task)
+        return {
+            "scenario": scenario, "type": "timed",
+            "message": f"Timed simulation '{scenario}' started.",
+        }
+
+    # Instant scenario
     candidates = get_scenario_candidates(scenario, lat, lon)
     if not candidates:
         return {"error": f"Unknown scenario: {scenario}", "available": list(list_scenarios().keys())}
 
-    # Inject into tracker (bypasses NWS fetch)
+    set_simulation_active(True)
     tracker = get_tracker()
     tracked = tracker.update(candidates)
     adapter._tracked_storms = tracked
     adapter._base_candidates = candidates
-
-    # Run alert cycle with injected data
     await run_cycle_once(ref_lat=lat, ref_lon=lon)
 
     return {
-        "scenario": scenario,
+        "scenario": scenario, "type": "instant",
         "candidates_injected": len(candidates),
-        "tracked_storms": len(tracked),
-        "message": f"Simulation '{scenario}' active. Check /api/storm-alerts or UI.",
+        "message": f"Simulation '{scenario}' active.",
     }
 
 
