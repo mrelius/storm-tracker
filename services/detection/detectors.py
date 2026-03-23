@@ -14,6 +14,7 @@ def _common_fields(storm: StormObject) -> dict:
     """Extract common signal fields from StormObject for DetectionEvent."""
     return dict(
         storm_id=storm.id,
+        nws_alert_id=storm.nws_alert_id,
         distance_mi=storm.distance_mi,
         direction=storm.direction,
         bearing_deg=storm.bearing_deg,

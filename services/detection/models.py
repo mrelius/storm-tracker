@@ -35,6 +35,7 @@ class StormObject:
     distance_mi: float
     bearing_deg: float
     direction: str = "unknown"
+    nws_alert_id: str = ""
     speed_mph: float = 0.0
     reflectivity_dbz: Optional[float] = None
     velocity_delta: Optional[float] = None
@@ -75,6 +76,7 @@ class DetectionEvent:
     distance_mi: float
     direction: str
     bearing_deg: float
+    nws_alert_id: str = ""
     eta_min: Optional[float] = None
     timestamp: float = 0.0
     lat: float = 0.0

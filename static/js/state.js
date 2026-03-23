@@ -23,6 +23,9 @@ const StormState = (function () {
     };
     const DEFAULT_EVENT_COLOR = "#4a90d9";
 
+    // Auto-track mode: "off" | "track" | "interrogate"
+    const AUTOTRACK_MODES = ["off", "track", "interrogate"];
+
     const state = {
         mode: "basic",
         location: {
@@ -30,6 +33,31 @@ const StormState = (function () {
             lat: null,
             lon: null,
             name: null,
+        },
+        camera: {
+            owner: "idle",          // "idle" | "gps" | "autotrack" (pulse is transient, not a top-level mode)
+            lastOwner: "idle",
+            since: 0,
+            reason: "init",
+            // Pulse camera lifecycle (all transient — never persisted)
+            contextPulseActive: false,
+            contextPulsePhase: "idle",      // "idle" | "zooming_out" | "holding" | "zooming_back"
+            contextPulseSessionId: null,
+            contextPulseStartedAt: null,
+            contextPulseCooldownUntil: null,
+            prePulseCameraSnapshot: null,   // { centerLat, centerLon, zoom }
+            pulseTargetCameraSnapshot: null, // { centerLat, centerLon, zoom }
+            // System camera motion guard
+            systemCameraMotionActive: false,
+            systemCameraMotionSource: null,  // "pulse" | "autotrack" | null
+        },
+        gpsFollow: {
+            active: false,       // GPS follow mode owns the map camera
+            lat: null,
+            lon: null,
+            accuracy: null,      // meters, if available
+            paused: false,       // paused by manual pan
+            lastUpdate: 0,
         },
         radar: {
             activeLayers: [],
@@ -45,7 +73,54 @@ const StormState = (function () {
             showMarine: false,
             warningsOnly: false,
             data: [],
-            panelOpen: true,
+            panelOpen: false,
+        },
+        autotrack: {
+            mode: "off",               // legacy: "off" | "track" | "interrogate" (kept for compat)
+            enabled: false,            // normalized: is AT on?
+            profile: "track",          // normalized: "track" | "interrogate"
+            targetAlertId: null,
+            targetEvent: null,
+            targetScore: 0,
+            radarSite: null,
+            followPaused: false,
+            radarPaused: false,
+            autoAddedLayers: [],
+            targetPolicy: "severity",  // "severity" | "distance" — decoupled from alert list sort
+        },
+        switchSound: {
+            enabled: true,              // user toggle — default on
+            lastSoundTime: 0,           // epoch of last played sound
+            lastSwitchFromId: null,     // previous target id
+            lastSwitchToId: null,       // current target id
+            suppressed: false,          // true if last switch was suppressed by cooldown
+            suppressReason: null,       // "cooldown" | "first_acquisition" | null
+        },
+        audioFollow: {
+            enabled: false,             // master toggle (Off = enabled:false, not a source mode)
+            policy: "noaa_preferred",   // "noaa_preferred" | "spotter_preferred" | "scanner_only"
+            owner: null,                // "manual" | "auto-follow" | null
+            currentSource: null,        // "noaa" | "spotter" | "scanner" | null
+            targetEvent: null,
+            status: "idle",             // "idle" | "live" | "pending" | "unavailable" | "grace"
+            manualOverride: false,
+            pendingSwitch: null,
+            debounceUntil: null,
+            stabilityUntil: null,
+            graceUntil: null,
+            cooldownUntil: null,
+            lastDecision: null,
+        },
+        context: {
+            rankingPolicy: "hybrid",        // "hybrid" | "distance" | "severity" — for pulse ranking only
+        },
+        pulse: {
+            primaryInViewEventId: null,     // alert ID of top-ranked in-frame event during pulse
+            inViewCount: 0,                 // number of alert polygons intersecting viewport during pulse
+            inViewEventIds: [],             // all in-frame event IDs, ranked order (frozen per session)
+            newlyInViewEventIds: [],        // IDs not seen in the previous completed pulse
+            newlyInViewCapturedAt: null,    // timestamp when newlyInView was captured (for decay)
+            lastPulseInViewEventIds: [],    // baseline from last completed pulse (for newness diff)
         },
     };
 
@@ -116,6 +191,15 @@ const StormState = (function () {
     function setAlerts(data) {
         state.alerts.data = data;
         emit("alertsUpdated", data);
+
+        // TFE shadow evaluation on every alert refresh
+        if (typeof ThreatFocusEngine !== "undefined") {
+            const at = state.autotrack;
+            ThreatFocusEngine.evaluate(data, {
+                trackedEvent: at.targetEvent,
+                trackedAlertId: at.targetAlertId,
+            });
+        }
     }
 
     function togglePanel() {
@@ -127,12 +211,54 @@ const StormState = (function () {
         return EVENT_COLORS[event] || DEFAULT_EVENT_COLOR;
     }
 
+    function cycleAutoTrack() {
+        const idx = AUTOTRACK_MODES.indexOf(state.autotrack.mode);
+        const next = AUTOTRACK_MODES[(idx + 1) % AUTOTRACK_MODES.length];
+        setAutoTrackMode(next);
+    }
+
+    function setAutoTrackMode(mode) {
+        if (!AUTOTRACK_MODES.includes(mode)) return;
+        const prev = state.autotrack.mode;
+        state.autotrack.mode = mode;
+
+        // Sync normalized fields
+        state.autotrack.enabled = mode !== "off";
+        if (mode === "track" || mode === "interrogate") {
+            state.autotrack.profile = mode;
+        }
+
+        if (mode === "off") {
+            state.autotrack.targetAlertId = null;
+            state.autotrack.targetEvent = null;
+            state.autotrack.targetScore = 0;
+            state.autotrack.radarSite = null;
+            state.autotrack.followPaused = false;
+            state.autotrack.radarPaused = false;
+            // Terminate context pulse if active
+            state.camera.contextPulseActive = false;
+            state.camera.contextPulsePhase = "idle";
+            state.camera.contextPulseSessionId = null;
+            state.camera.contextPulseStartedAt = null;
+            state.camera.prePulseCameraSnapshot = null;
+            state.camera.pulseTargetCameraSnapshot = null;
+            state.camera.systemCameraMotionActive = false;
+            state.camera.systemCameraMotionSource = null;
+            state.pulse.primaryInViewEventId = null;
+            state.pulse.inViewCount = 0;
+            state.pulse.inViewEventIds = [];
+            state.pulse.newlyInViewEventIds = [];
+        }
+        emit("autotrackChanged", { mode, prev });
+    }
+
     return {
         state, on, emit,
         setMode, setLocation,
         canActivateLayer, activateLayer, deactivateLayer,
         setAlertSort, setAlertCategory, setAlerts,
         togglePanel, getEventColor,
-        LAYER_RULES, MAX_ACTIVE_LAYERS,
+        cycleAutoTrack, setAutoTrackMode,
+        LAYER_RULES, MAX_ACTIVE_LAYERS, AUTOTRACK_MODES,
     };
 })();

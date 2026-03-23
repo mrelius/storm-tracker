@@ -68,13 +68,13 @@ async def list_alerts(
 
     logger.debug(f"Cache MISS: {cache_key}")
 
-    now = datetime.now(timezone.utc).isoformat()
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     conditions = []
     params = []
 
     if active:
         conditions.append("a.expires > ?")
-        params.append(now)
+        params.append(now_utc)
     if category:
         conditions.append("a.category = ?")
         params.append(category.value)
@@ -167,7 +167,7 @@ async def get_alert_county_map():
 
     logger.debug(f"Cache MISS: {cache_key}")
 
-    now = datetime.now(timezone.utc).isoformat()
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     db = await get_connection()
     try:
         rows = await db.execute(
@@ -176,7 +176,7 @@ async def get_alert_county_map():
                JOIN alerts a ON a.id = ac.alert_id
                WHERE a.expires > ?
                ORDER BY a.priority_score DESC""",
-            (now,),
+            (now_utc,),
         )
         results = await rows.fetchall()
 

@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>ThreatFocusEngine Unit Tests — v139</title>
+<style>
+body { font-family: monospace; background: #111; color: #ccc; padding: 20px; }
+.pass { color: #22c55e; } .fail { color: #ef4444; } .info { color: #64748b; }
+h2 { color: #4a90d9; margin-top: 24px; }
+pre { margin: 2px 0; }
+</style>
+</head>
+<body>
+<h1>ThreatFocusEngine Unit Tests</h1>
+<div id="results"></div>
+<div id="app"></div>
+
+<script>
+const results = document.getElementById("results");
+let passed = 0, failed = 0;
+
+function assert(name, cond) {
+    if (cond) { passed++; out("PASS", name, "pass"); }
+    else { failed++; out("FAIL", name, "fail"); }
+}
+function out(tag, msg, cls) {
+    const p = document.createElement("pre");
+    p.className = cls || "info";
+    p.textContent = `[${tag}] ${msg}`;
+    results.appendChild(p);
+}
+function heading(t) {
+    const h = document.createElement("h2");
+    h.textContent = t;
+    results.appendChild(h);
+}
+
+// Minimal StormState stub
+const StormState = {
+    state: {
+        camera: { owner: "autotrack", contextPulseActive: false, contextPulsePhase: "idle" },
+        autotrack: { enabled: true, targetAlertId: null, targetEvent: null },
+        alerts: { data: [] },
+        pulse: { primaryInViewEventId: null, inViewEventIds: [], inViewCount: 0, newlyInViewEventIds: [], newlyInViewCapturedAt: null, lastPulseInViewEventIds: [] },
+    },
+};
+const STLogger = { for() { return { info() {} }; } };
+
+function resetState() {
+    StormState.state.camera.contextPulseActive = false;
+    StormState.state.autotrack.enabled = true;
+    StormState.state.autotrack.targetAlertId = null;
+    StormState.state.autotrack.targetEvent = null;
+    StormState.state.alerts.data = [];
+}
+
+function makeAlert(id, event, distMi, score) {
+    return { id, event, distance_mi: distMi, priority_score: score || 0, polygon: true, headline: event + " headline", description: "", expires: new Date(Date.now() + 3600000).toISOString() };
+}
+</script>
+<script>
+// ── Test 1: No alerts ────────────────────────────────────────
+heading("Test 1: No alerts");
+(function() {
+    resetState();
+    ThreatFocusEngine.init();
+    ThreatFocusEngine.evaluate([], {});
+    const out = ThreatFocusEngine.getDerivedOutputs();
+    assert("primary is null", out.primaryEventId === null);
+    assert("visible cards empty", out.visibleCardEventIds.length === 0);
+    assert("audio target null", out.audioTargetEventId === null);
+    assert("pulse target null", out.pulseTargetEventId === null);
+})();
+
+// ── Test 2: Single valid alert ───────────────────────────────
+heading("Test 2: Single valid alert");
+(function() {
+    resetState();
+    const alerts = [makeAlert("tor-1", "Tornado Warning", 10)];
+    ThreatFocusEngine.evaluate(alerts, {});
+    const out = ThreatFocusEngine.getDerivedOutputs();
+    assert("primary is tor-1", out.primaryEventId === "tor-1");
+    assert("visible cards has 1", out.visibleCardEventIds.length === 1);
+    assert("score > 0", out.primaryScore > 0);
+})();
+
+// ── Test 3: Weak distant alert ignored (no primary switch) ──
+heading("Test 3: Weak distant alert vs strong primary");
+(function() {
+    resetState();
+    const alerts = [
+        makeAlert("tor-1", "Tornado Warning", 8),
+        makeAlert("sws-1", "Special Weather Statement", 200),
+    ];
+    ThreatFocusEngine.evaluate(alerts, {});
+    const out = ThreatFocusEngine.getDerivedOutputs();
+    assert("primary is TOR not SWS", out.primaryEventId === "tor-1");
+    assert("SWS not in visible cards", !out.visibleCardEventIds.includes("sws-1"));
+})();
+
+// ── Test 4: Dwell prevents switch ────────────────────────────
+heading("Test 4: Dwell prevents premature switch");
+(function() {
+    resetState();
+    ThreatFocusEngine.destroy();
+    ThreatFocusEngine.init();
+
+    const alerts1 = [makeAlert("svr-1", "Severe Thunderstorm Warning", 15)];
+    ThreatFocusEngine.evaluate(alerts1, {});
+    assert("initial primary is svr-1", ThreatFocusEngine.getDerivedOutputs().primaryEventId === "svr-1");
+
+    // Immediately evaluate with a slightly better alert — should be suppressed by dwell
+    const alerts2 = [
+        makeAlert("svr-1", "Severe Thunderstorm Warning", 15),
+        makeAlert("svr-2", "Severe Thunderstorm Warning", 12),
+    ];
+    ThreatFocusEngine.evaluate(alerts2, {});
+    const out = ThreatFocusEngine.getDerivedOutputs();
+    // svr-2 is slightly better but dwell should prevent switch (delta < 20)
+    assert("dwell prevents switch to svr-2", out.primaryEventId === "svr-1");
+})();
+
+// ── Test 5: +20 score delta forces switch ────────────────────
+heading("Test 5: Large score delta forces switch through dwell");
+(function() {
+    resetState();
+    ThreatFocusEngine.destroy();
+    ThreatFocusEngine.init();
+
+    const alerts1 = [makeAlert("ffw-1", "Flash Flood Warning", 30)];
+    ThreatFocusEngine.evaluate(alerts1, {});
+    assert("initial primary is ffw-1", ThreatFocusEngine.getDerivedOutputs().primaryEventId === "ffw-1");
+
+    // Add tornado warning nearby — huge score delta should override dwell
+    const alerts2 = [
+        makeAlert("ffw-1", "Flash Flood Warning", 30),
+        makeAlert("tor-1", "Tornado Warning", 5),
+    ];
+    ThreatFocusEngine.evaluate(alerts2, {});
+    const out = ThreatFocusEngine.getDerivedOutputs();
+    assert("tornado overrides flood primary", out.primaryEventId === "tor-1");
+})();
+
+// ── Test 6: Tornado override ─────────────────────────────────
+heading("Test 6: Tornado override bypasses dwell");
+(function() {
+    resetState();
+    ThreatFocusEngine.destroy();
+    ThreatFocusEngine.init();
+
+    const alerts1 = [makeAlert("svr-1", "Severe Thunderstorm Warning", 10)];
+    ThreatFocusEngine.evaluate(alerts1, {});
+
+    const alerts2 = [
+        makeAlert("svr-1", "Severe Thunderstorm Warning", 10),
+        makeAlert("tor-1", "Tornado Warning", 40),
+    ];
+    ThreatFocusEngine.evaluate(alerts2, {});
+    const out = ThreatFocusEngine.getDerivedOutputs();
+    assert("tornado override even at 40mi", out.primaryEventId === "tor-1");
+})();
+
+// ── Test 7: Primary disappears ───────────────────────────────
+heading("Test 7: Primary disappears from alert set");
+(function() {
+    resetState();
+    ThreatFocusEngine.destroy();
+    ThreatFocusEngine.init();
+
+    ThreatFocusEngine.evaluate([makeAlert("tor-1", "Tornado Warning", 10)], {});
+    assert("primary is tor-1", ThreatFocusEngine.getDerivedOutputs().primaryEventId === "tor-1");
+
+    // Alert disappears
+    ThreatFocusEngine.evaluate([makeAlert("svr-1", "Severe Thunderstorm Warning", 15)], {});
+    const out = ThreatFocusEngine.getDerivedOutputs();
+    assert("primary switches to svr-1 after tor-1 disappears", out.primaryEventId === "svr-1");
+})();
+
+// ── Test 8: Max 3 visible cards ──────────────────────────────
+heading("Test 8: Max 3 visible cards");
+(function() {
+    resetState();
+    ThreatFocusEngine.destroy();
+    ThreatFocusEngine.init();
+
+    const alerts = [
+        makeAlert("tor-1", "Tornado Warning", 5),
+        makeAlert("svr-1", "Severe Thunderstorm Warning", 8),
+        makeAlert("svr-2", "Severe Thunderstorm Warning", 10),
+        makeAlert("svr-3", "Severe Thunderstorm Warning", 12),
+        makeAlert("svr-4", "Severe Thunderstorm Warning", 15),
+    ];
+    ThreatFocusEngine.evaluate(alerts, {});
+    const out = ThreatFocusEngine.getDerivedOutputs();
+    assert("visible cards capped at 3", out.visibleCardEventIds.length <= 3);
+    assert("primary is tor-1", out.primaryEventId === "tor-1");
+})();
+
+// ── Test 9: Cross-class inclusion ────────────────────────────
+heading("Test 9: Cross-class secondary inclusion");
+(function() {
+    resetState();
+    ThreatFocusEngine.destroy();
+    ThreatFocusEngine.init();
+
+    const alerts = [
+        makeAlert("tor-1", "Tornado Warning", 10),
+        makeAlert("ffw-1", "Flash Flood Warning", 8),
+    ];
+    ThreatFocusEngine.evaluate(alerts, { trackedEvent: "Tornado Warning" });
+    const out = ThreatFocusEngine.getDerivedOutputs();
+    assert("primary is tor-1", out.primaryEventId === "tor-1");
+    // FFW is different hazard class + severe + close → should appear as secondary
+    assert("ffw-1 in visible cards", out.visibleCardEventIds.includes("ffw-1"));
+})();
+
+// ── Test 10: Invalid distance safe handling ──────────────────
+heading("Test 10: Invalid/missing distance");
+(function() {
+    resetState();
+    ThreatFocusEngine.destroy();
+    ThreatFocusEngine.init();
+
+    const alerts = [
+        { id: "bad-1", event: "Tornado Warning", distance_mi: null, polygon: true, headline: "", description: "", expires: null },
+        { id: "bad-2", event: "Severe Thunderstorm Warning", distance_mi: undefined, polygon: true, headline: "", description: "", expires: null },
+        { id: "bad-3", event: "Flood Warning", distance_mi: NaN, polygon: true, headline: "", description: "", expires: null },
+    ];
+    ThreatFocusEngine.evaluate(alerts, {});
+    const out = ThreatFocusEngine.getDerivedOutputs();
+    assert("does not crash", true);
+    assert("primary selected despite bad distances", out.primaryEventId === "bad-1"); // TOR highest severity
+    assert("score is finite", isFinite(out.primaryScore));
+})();
+
+// ── Test 11: Feature flag behavior ───────────────────────────
+heading("Test 11: Feature flag");
+(function() {
+    assert("default off", ThreatFocusEngine.useThreatFocusEngine() === false);
+    ThreatFocusEngine.setFeatureFlag(true);
+    assert("can enable", ThreatFocusEngine.useThreatFocusEngine() === true);
+    ThreatFocusEngine.setFeatureFlag(false);
+    assert("can disable", ThreatFocusEngine.useThreatFocusEngine() === false);
+})();
+
+// ── Test 12: Subscribe ───────────────────────────────────────
+heading("Test 12: Subscribe receives updates");
+(function() {
+    resetState();
+    ThreatFocusEngine.destroy();
+    ThreatFocusEngine.init();
+
+    let received = null;
+    ThreatFocusEngine.subscribe(function(outputs) { received = outputs; });
+
+    ThreatFocusEngine.evaluate([makeAlert("tor-1", "Tornado Warning", 10)], {});
+    assert("subscriber received outputs", received !== null);
+    assert("subscriber got correct primary", received.primaryEventId === "tor-1");
+})();
+
+// ── Summary ──────────────────────────────────────────────────
+heading("Summary");
+out("TOTAL", `${passed} passed, ${failed} failed`, failed ? "fail" : "pass");
+document.title = failed ? `FAIL (${failed})` : `PASS (${passed})`;
+</script>
+</body>
+</html>

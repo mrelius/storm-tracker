@@ -10,7 +10,7 @@ const AlertPanel = (function () {
     let distanceDebounce = null;
 
     function init() {
-        // Panel toggle
+        // Panel toggle (whole-panel open/close only)
         document.getElementById("btn-toggle-panel").addEventListener("click", () => {
             StormState.togglePanel();
         });
@@ -19,51 +19,10 @@ const AlertPanel = (function () {
             const panel = document.getElementById("alert-panel");
             panel.classList.toggle("panel-open", open);
             panel.classList.toggle("panel-closed", !open);
+            // Shift legends and other right-anchored elements
+            document.getElementById("app").classList.toggle("panel-is-closed", !open);
+            updateCollapsedRail();
         });
-
-        // Sort controls
-        document.getElementById("sort-field").addEventListener("change", (e) => {
-            StormState.setAlertSort(e.target.value);
-            fetchAlerts();
-        });
-
-        document.getElementById("btn-sort-order").addEventListener("click", () => {
-            const current = StormState.state.alerts.sortOrder;
-            const next = current === "desc" ? "asc" : "desc";
-            StormState.setAlertSort(StormState.state.alerts.sortBy, next);
-            document.getElementById("btn-sort-order").textContent = next === "desc" ? "\u25BC" : "\u25B2";
-            fetchAlerts();
-        });
-
-        // Filter controls
-        document.querySelectorAll(".filter-btn").forEach((btn) => {
-            btn.addEventListener("click", () => {
-                document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
-                btn.classList.add("active");
-                StormState.setAlertCategory(btn.dataset.category || null);
-                fetchAlerts();
-            });
-        });
-
-        // Warnings-only toggle
-        const warnBtn = document.getElementById("btn-warnings-toggle");
-        if (warnBtn) {
-            warnBtn.addEventListener("click", () => {
-                StormState.state.alerts.warningsOnly = !StormState.state.alerts.warningsOnly;
-                warnBtn.classList.toggle("active", StormState.state.alerts.warningsOnly);
-                fetchAlerts();
-            });
-        }
-
-        // Marine toggle
-        const marineBtn = document.getElementById("btn-marine-toggle");
-        if (marineBtn) {
-            marineBtn.addEventListener("click", () => {
-                StormState.state.alerts.showMarine = !StormState.state.alerts.showMarine;
-                marineBtn.classList.toggle("active", StormState.state.alerts.showMarine);
-                fetchAlerts();
-            });
-        }
 
         // Alert detail close
         document.getElementById("btn-detail-close").addEventListener("click", closeDetail);
@@ -79,9 +38,141 @@ const AlertPanel = (function () {
             }
         });
 
+        // Autotrack target highlight + collapsed rail
+        StormState.on("autotrackTargetChanged", onAutotrackTarget);
+        StormState.on("autotrackChanged", onAutotrackModeChange);
+
+        // Collapsed rail click → reopen panel
+        const rail = document.getElementById("at-collapsed-rail");
+        if (rail) {
+            rail.addEventListener("click", () => {
+                if (!StormState.state.alerts.panelOpen) {
+                    StormState.togglePanel();
+                }
+            });
+        }
+
         // Initial fetch + periodic refresh
         fetchAlerts();
         refreshTimer = setInterval(fetchAlerts, REFRESH_INTERVAL);
+    }
+
+    // ── Collapsed Rail ──────────────────────────────────────────────────
+
+    function onAutotrackTarget(alertId) {
+        highlightTrackedAlert(alertId);
+        updateCollapsedRail();
+    }
+
+    function onAutotrackModeChange(data) {
+        updateCollapsedRail();
+    }
+
+    function updateCollapsedRail() {
+        const rail = document.getElementById("at-collapsed-rail");
+        if (!rail) return;
+
+        const at = StormState.state.autotrack;
+        const panelOpen = StormState.state.alerts.panelOpen;
+
+        const appEl = document.getElementById("app");
+
+        // Show rail only when: panel closed AND autotrack active AND has target
+        if (panelOpen || at.mode === "off" || !at.targetAlertId) {
+            rail.classList.add("hidden");
+            if (appEl) appEl.classList.remove("rail-visible");
+            return;
+        }
+
+        // Find the tracked alert in data
+        const alert = StormState.state.alerts.data.find(a => a.id === at.targetAlertId);
+        if (!alert) {
+            rail.classList.add("hidden");
+            if (appEl) appEl.classList.remove("rail-visible");
+            return;
+        }
+
+        rail.classList.remove("hidden");
+        if (appEl) appEl.classList.add("rail-visible");
+
+        // Set bar background tint to match alert color
+        const cssClass = getEventCssClass(alert.event);
+        rail.className = "at-collapsed-rail at-bar-" + cssClass;
+        const color = StormState.getEventColor(alert.event);
+        const countdown = formatCountdown(alert.expires);
+        const shortEvent = abbreviateEvent(alert.event);
+
+        // Build scrolling ticker content from alert fields
+        const tickerParts = [];
+        if (alert.headline) tickerParts.push(alert.headline);
+        if (alert.description) {
+            // First ~200 chars of description for ticker
+            const desc = alert.description.replace(/\n+/g, " ").replace(/\s+/g, " ").trim();
+            tickerParts.push(desc.length > 200 ? desc.substring(0, 197) + "..." : desc);
+        }
+        if (alert.instruction) {
+            const instr = alert.instruction.replace(/\n+/g, " ").replace(/\s+/g, " ").trim();
+            tickerParts.push("ACTION: " + (instr.length > 150 ? instr.substring(0, 147) + "..." : instr));
+        }
+        const tickerText = tickerParts.join("  \u2014  ");  // em dash separator
+
+        rail.innerHTML = `
+            <div class="at-rail-fixed" style="border-left-color:${color}">
+                <span class="at-rail-event ${cssClass}">${shortEvent}</span>
+                <span class="at-rail-tracking">TRACKING</span>
+                <span class="at-rail-meta">${countdown.text}</span>
+            </div>
+            <div class="at-rail-ticker">
+                <span class="at-rail-ticker-text">${escapeHtml(tickerText)}</span>
+            </div>
+        `;
+    }
+
+    function abbreviateEvent(event) {
+        const abbrevs = {
+            "Tornado Warning": "TOR WRN",
+            "Severe Thunderstorm Warning": "SVR TSW",
+            "Tornado Watch": "TOR WCH",
+            "Flash Flood Warning": "FFW",
+            "Flood Warning": "FLW",
+            "Winter Storm Warning": "WSW",
+            "Winter Weather Advisory": "WWA",
+            "Special Weather Statement": "SPS",
+        };
+        return abbrevs[event] || event;
+    }
+
+    /**
+     * Highlight the autotrack-targeted alert in the panel list.
+     * Scrolls to the card and adds a visual emphasis class.
+     */
+    function highlightTrackedAlert(alertId) {
+        const list = document.getElementById("alert-list");
+        if (!list) return;
+
+        // Remove existing highlight and entry animation
+        list.querySelectorAll(".alert-card.at-tracked").forEach(el => {
+            el.classList.remove("at-tracked", "at-tracked-enter");
+        });
+
+        if (!alertId) return;
+
+        // Find and highlight the matching card
+        const card = list.querySelector(`.alert-card[data-alert-id="${CSS.escape(alertId)}"]`);
+        if (!card) return;
+
+        card.classList.add("at-tracked", "at-tracked-enter");
+
+        // Remove entry animation class after it completes
+        card.addEventListener("animationend", () => {
+            card.classList.remove("at-tracked-enter");
+        }, { once: true });
+
+        // Only scroll into view when panel is open — scrollIntoView on a
+        // translateX(100%) panel forces it visible, breaking collapsed state
+        if (StormState.state.alerts.panelOpen) {
+            card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        }
     }
 
     async function fetchAlerts() {
@@ -125,15 +216,36 @@ const AlertPanel = (function () {
         const countEl = document.getElementById("alert-count");
         countEl.textContent = alerts.length;
 
-        // Update category count badges
-        updateCategoryBadges(alerts);
+        // Toggle NWS section visibility based on data
+        const nwsSection = document.getElementById("nws-alert-section");
+        if (nwsSection) nwsSection.classList.toggle("hidden", alerts.length === 0);
+
+        // Toggle section divider: visible only when both sections have data
+        const divider = document.getElementById("panel-section-divider");
+        const stormSection = document.getElementById("storm-alert-section");
+        const stormHasData = stormSection && !stormSection.classList.contains("hidden");
+        if (divider) divider.classList.toggle("hidden", !(stormHasData && alerts.length > 0));
+
+        // Unified empty state: show only when neither section has data
+        const emptyState = document.getElementById("panel-empty-state");
+        if (emptyState) emptyState.classList.toggle("hidden", stormHasData || alerts.length > 0);
 
         if (alerts.length === 0) {
-            list.innerHTML = '<div class="alert-empty">No active alerts matching filter</div>';
+            list.innerHTML = "";
             return;
         }
 
-        list.innerHTML = alerts.map(a => buildAlertCard(a)).join("");
+        // Pin tracked alert to top of list
+        const trackedId = StormState.state.autotrack.targetAlertId;
+        let orderedAlerts = alerts;
+        if (trackedId) {
+            const tracked = alerts.find(a => a.id === trackedId);
+            if (tracked) {
+                orderedAlerts = [tracked, ...alerts.filter(a => a.id !== trackedId)];
+            }
+        }
+
+        list.innerHTML = orderedAlerts.map(a => buildAlertCard(a)).join("");
 
         // Attach click handlers
         list.querySelectorAll(".alert-card").forEach((card) => {
@@ -159,6 +271,11 @@ const AlertPanel = (function () {
 
         // Update map overlays
         AlertRenderer.fetchAndRender();
+
+        // Re-apply autotrack highlight after DOM rebuild
+        if (trackedId) {
+            highlightTrackedAlert(trackedId);
+        }
     }
 
     function updateCategoryBadges(alerts) {
@@ -194,19 +311,38 @@ const AlertPanel = (function () {
         const issued = formatTimeShort(alert.issued);
         const hasFocus = alert.polygon || (alert.county_fips && alert.county_fips.length > 0);
 
-        return `<div class="alert-card ${cssClass}" data-alert-id="${escapeHtml(alert.id)}">
+        // Per-card expiry bar
+        let expiryBar = "";
+        if (alert.expires) {
+            try {
+                const expMs = new Date(alert.expires).getTime();
+                const nowMs = Date.now();
+                const remainMs = expMs - nowMs;
+                if (remainMs > 0) {
+                    const pct = Math.min(100, Math.max(2, (remainMs / (60 * 60000)) * 100));
+                    const urgClass = remainMs < 300000 ? "ate-urgent" : remainMs < 900000 ? "ate-warning" : "";
+                    expiryBar = `<div class="card-expiry-bar"><div class="card-expiry-fill ${urgClass}" style="width:${pct}%"></div></div>`;
+                }
+            } catch (e) { /* ok */ }
+        }
+
+        // Check if alert is currently in-view during pulse (visual hint only, does not alter ranking)
+        const inViewIds = StormState.state.pulse.inViewEventIds || [];
+        const isInView = StormState.state.camera.contextPulseActive && inViewIds.includes(alert.id);
+        const inViewBadge = isInView ? '<span class="alert-in-view-badge">IN VIEW</span>' : '';
+
+        return `<div class="alert-card ${cssClass}${isInView ? ' alert-in-view' : ''}" data-alert-id="${escapeHtml(alert.id)}">
             <div class="alert-card-header">
                 <span class="alert-event ${cssClass}">${escapeHtml(alert.event)}</span>
+                ${inViewBadge}
                 <span class="alert-card-right">
                     ${distText ? `<span class="alert-distance">${distText}</span>` : ""}
+                    <span class="alert-countdown ${countdown.urgent ? 'countdown-urgent' : ''}">${countdown.text}</span>
                     ${hasFocus ? `<button class="alert-focus-btn" title="Focus on map">&#8982;</button>` : ""}
                 </span>
             </div>
             <div class="alert-headline">${escapeHtml(alert.headline || "")}</div>
-            <div class="alert-meta">
-                <span>Issued: ${issued}</span>
-                <span class="alert-countdown ${countdown.urgent ? 'countdown-urgent' : ''}">${countdown.text}</span>
-            </div>
+            ${expiryBar}
         </div>`;
     }
 

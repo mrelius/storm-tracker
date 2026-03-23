@@ -171,6 +171,7 @@ const RadarManager = (function () {
                 zIndex: 15,
                 maxZoom: frame.max_zoom || 10,
                 errorTileUrl: "",  // suppress broken tile images
+                className: "radar-crossfade",
             });
 
             layer.addTo(map);
@@ -396,6 +397,7 @@ const RadarManager = (function () {
                 opacity: 0,
                 zIndex: 10,
                 maxZoom: frame.max_zoom || 12,
+                // No crossfade class — animation frames need instant opacity swap
             });
 
             layer.addTo(map);
@@ -711,5 +713,115 @@ const RadarManager = (function () {
         }
     }
 
-    return { init, loadReflectivity: loadAndPreload, toggleReflectivity, retryRadar };
+    // --- Programmatic control for AutoTrack ---
+
+    /**
+     * Switch radar site without setting manualSiteOverride.
+     * Used by autotrack interrogation — does not block future auto-selection.
+     */
+    async function setSiteForAutoTrack(siteId) {
+        if (!siteId) return false;
+        try {
+            const resp = await fetch(`/api/radar/nexrad/select?site_id=${siteId}`, { method: "POST" });
+            if (!resp.ok) return false;
+            const data = await resp.json();
+            radarSite = data.site;
+            updateSourceLabels();
+
+            // Reload active overlays for new site
+            const layers = StormState.state.radar.activeLayers;
+            if (layers.includes("srv")) await loadOverlay("srv");
+            if (layers.includes("cc")) await loadOverlay("cc");
+            if (layers.includes("srv") || layers.includes("cc")) showRangeCircle();
+
+            // Update selector display without triggering change handler
+            const select = document.getElementById("radar-site-selector");
+            if (select) select.value = siteId;
+
+            return true;
+        } catch (e) {
+            console.error("[AutoTrack] Failed to switch radar site:", e);
+            return false;
+        }
+    }
+
+    /**
+     * Enable SRV programmatically (for autotrack interrogation).
+     * Returns true if SRV is now active.
+     */
+    async function enableSRV() {
+        if (StormState.state.radar.activeLayers.includes("srv")) return true;
+        const result = StormState.activateLayer("srv");
+        if (!result.ok) return false;
+        const btn = document.getElementById("btn-srv-toggle");
+        if (btn) btn.classList.add("active");
+        if (StormState.state.radar.animating) {
+            stopAnimation();
+            showAnimPausedNotice(true);
+        }
+        await loadOverlay("srv");
+        // Check if overlay survived loading (disableOverlay removes it on failure)
+        if (!StormState.state.radar.activeLayers.includes("srv")) return false;
+        showSRVLegend(true);
+        showRangeCircle();
+        updateSourceLabels();
+        return true;
+    }
+
+    /**
+     * Enable CC programmatically (for autotrack interrogation).
+     * Requires SRV to be active first.
+     * Returns true if CC is now active.
+     */
+    async function enableCC() {
+        if (StormState.state.radar.activeLayers.includes("cc")) return true;
+        if (!StormState.state.radar.activeLayers.includes("srv")) return false;
+        const result = StormState.activateLayer("cc");
+        if (!result.ok) return false;
+        const btn = document.getElementById("btn-cc-toggle");
+        if (btn) btn.classList.add("active");
+        await loadOverlay("cc");
+        // Check if overlay survived loading (disableOverlay removes it on failure)
+        if (!StormState.state.radar.activeLayers.includes("cc")) return false;
+        showCCLegend(true);
+        updateSourceLabels();
+        return true;
+    }
+
+    /**
+     * Disable layers that were auto-added by autotrack.
+     * Only removes layers listed in layerIds. Never touches user-enabled layers.
+     */
+    function disableLayers(layerIds) {
+        for (const pid of layerIds) {
+            if (!StormState.state.radar.activeLayers.includes(pid)) continue;
+            StormState.deactivateLayer(pid);
+            removeOverlay(pid);
+            const btn = document.getElementById(`btn-${pid}-toggle`);
+            if (btn) btn.classList.remove("active");
+            if (pid === "srv") {
+                showSRVLegend(false);
+                removeRangeCircle();
+            }
+            if (pid === "cc") showCCLegend(false);
+        }
+        updateSourceLabels();
+    }
+
+    function getRadarSite() {
+        return radarSite;
+    }
+
+    function getManualSiteOverride() {
+        return manualSiteOverride;
+    }
+
+    function getOverlayLayer(productId) { return overlayLayers[productId] || null; }
+
+    return {
+        init, loadReflectivity: loadAndPreload, toggleReflectivity, retryRadar,
+        // Programmatic control for AutoTrack
+        setSiteForAutoTrack, enableSRV, enableCC, disableLayers,
+        getRadarSite, getManualSiteOverride, getOverlayLayer,
+    };
 })();

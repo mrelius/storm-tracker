@@ -548,6 +548,7 @@ def _alert_to_dict(alert: StormAlert) -> dict:
         # Identity
         "alert_id": alert.alert_id,
         "storm_id": alert.storm_id,
+        "nws_alert_id": alert.nws_alert_id,
         "type": alert.type,
         "severity": alert.severity,
         # Content

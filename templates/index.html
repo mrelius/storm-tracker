@@ -2,19 +2,19 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>Storm Tracker</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="stylesheet" href="/static/css/app.css?v=34" />
+    <link rel="stylesheet" href="/static/css/app.css?v=141" />
 </head>
 <body>
-    <div id="app">
+    <div id="app" class="panel-is-closed">
         <!-- Map Container -->
         <div id="map"></div>
-
-        <!-- Header restore button (visible only when minimized) -->
-        <button id="header-restore" title="Show header">&#9660; Header</button>
 
         <!-- Staleness Warning Banner -->
         <div id="staleness-banner" class="staleness-banner hidden"></div>
@@ -23,6 +23,7 @@
         <div id="top-bar">
             <div id="top-bar-left">
                 <span id="app-title">STORM TRACKER</span>
+                <span id="build-version" class="build-version">v141</span>
                 <span id="mode-badge" class="badge badge-basic">BASIC</span>
                 <span id="offline-indicator" class="badge badge-offline hidden">OFFLINE</span>
             </div>
@@ -33,24 +34,42 @@
             <div id="top-bar-right">
                 <span id="radar-timestamp" class="radar-info">Radar: --</span>
                 <span id="radar-age" class="radar-info"></span>
-                <button id="btn-feedback" class="radar-btn" title="Send feedback" style="font-size:11px;padding:3px 8px;">FB</button>
-                <button id="btn-minimize-header" class="radar-btn" title="Minimize header" style="font-size:11px;padding:3px 8px;">&#9650;</button>
+                <button id="btn-my-location" class="radar-btn" title="Center on my location + enable all features">&#9737;</button>
+                <button id="btn-fullscreen" class="radar-btn" title="Toggle fullscreen">&#9974;</button>
+                <button id="btn-settings" class="radar-btn" title="Settings">&#9881;</button>
                 <button id="btn-toggle-panel" title="Toggle Alert Panel">&#9776;</button>
             </div>
         </div>
 
+        <!-- System Status Strip -->
+        <div id="system-status-strip" class="system-status-strip">
+            <span id="ss-alert-status" class="ss-badge ss-live" title="Alert pipeline">Live</span>
+            <span id="ss-mode" class="ss-badge ss-mode-idle" title="Camera mode">IDLE</span>
+            <span id="ss-at" class="ss-badge ss-dim" title="Auto Track">AT OFF</span>
+            <span id="ss-audio" class="ss-badge ss-dim" title="Audio Follow">AF OFF</span>
+            <span id="ss-age" class="ss-age" title="Last update">--</span>
+            <span id="ss-filters" class="ss-filters"></span>
+        </div>
+
+        <!-- Guidance Explainer (hidden, shown on click) -->
+        <div id="guidance-explainer" class="guidance-explainer hidden"></div>
+
         <!-- Radar Controls -->
         <div id="radar-controls">
-            <button id="btn-radar-toggle" class="radar-btn" title="Toggle Reflectivity">
-                <span class="radar-icon">&#9729;</span> REF
-            </button>
+            <button id="btn-radar-toggle" class="radar-btn" title="Toggle Reflectivity">REF</button>
             <button id="btn-srv-toggle" class="radar-btn" title="Toggle Storm Relative Velocity">
                 SRV
             </button>
             <button id="btn-cc-toggle" class="radar-btn" title="CC — requires SRV active (site radar, aligned with SRV)">
                 CC
             </button>
-            <select id="radar-site-selector" class="radar-site-selector" title="Select radar site">
+            <button id="btn-spc-toggle" class="radar-btn" title="Toggle SPC Outlook overlay">SPC</button>
+            <button id="btn-autotrack" class="radar-btn at-off" title="Auto Track: Off — click to enable">AT</button>
+            <button id="btn-audio-follow-toggle" class="radar-btn af-disabled" title="Audio Follow: OFF (click to enable)">AF</button>
+            <button id="btn-noaa-test" class="radar-btn" title="Test NOAA audio (Shift+T)">TST</button>
+            <button id="btn-switch-sound-toggle" class="radar-btn sw-sound-on" title="Switch sound: ON (click to mute)">SW</button>
+            <button id="btn-context-pulse-toggle" class="radar-btn cp-on" title="Context Pulse: ON (click to disable)">CP</button>
+            <select id="radar-site-selector" class="radar-site-selector srv-popup-hidden" title="Select radar site">
                 <option value="auto">Auto (nearest)</option>
             </select>
             <span id="radar-loading" class="radar-loading hidden">Loading radar...</span>
@@ -62,13 +81,63 @@
             </div>
             <span id="anim-paused-notice" class="anim-notice hidden">Paused — SRV is a single scan</span>
         </div>
-        <div id="radar-error" class="radar-error hidden">
-            <span class="radar-error-msg">Radar unavailable</span>
-            <button onclick="RadarManager.retryRadar()" class="radar-retry-btn">Retry</button>
+        <!-- SRV Popup (radar site selector) -->
+        <div id="srv-popup" class="srv-popup hidden">
+            <div class="srv-popup-header">
+                <span>Radar Site</span>
+                <button id="srv-popup-close" class="srv-popup-close">&times;</button>
+            </div>
+            <div class="srv-popup-body" id="srv-popup-body"></div>
+        </div>
+        <!-- SPC Outlook Legend -->
+        <div id="spc-legend" class="spc-legend hidden">
+            <div class="spc-legend-title">SPC Day 1 Outlook</div>
+            <div class="spc-legend-item"><span class="spc-swatch" style="background:#55BB55"></span> General Thunderstorms</div>
+            <div class="spc-legend-item"><span class="spc-swatch" style="background:#005500"></span> Marginal (1/5)</div>
+            <div class="spc-legend-item"><span class="spc-swatch" style="background:#DDAA00"></span> Slight (2/5)</div>
+            <div class="spc-legend-item"><span class="spc-swatch" style="background:#FF6600"></span> Enhanced (3/5)</div>
+            <div class="spc-legend-item"><span class="spc-swatch" style="background:#FF0000"></span> Moderate (4/5)</div>
+            <div class="spc-legend-item"><span class="spc-swatch" style="background:#FF00FF"></span> High (5/5)</div>
         </div>
 
-        <!-- Source Labels -->
-        <div id="source-labels" class="source-labels hidden"></div>
+        <!-- Camera indicator (subtle, top-right) -->
+        <div id="camera-indicator" class="camera-indicator hidden"></div>
+
+        <!-- Clarity Layer: Status Banner + ETA + Confidence -->
+        <div id="clarity-strip" class="clarity-strip">
+            <span id="clarity-banner" class="clarity-banner cb-idle">No active threats</span>
+            <span id="clarity-eta" class="clarity-eta"></span>
+            <span id="clarity-confidence" class="clarity-confidence"></span>
+        </div>
+        <!-- Pulse context indicator -->
+        <div id="pulse-context-label" class="pulse-context-label"></div>
+
+        <!-- Mode toast (transient feedback) -->
+        <div id="mode-toast" class="mode-toast hidden"></div>
+
+        <!-- GPS paused indicator (near GPS button area) -->
+        <div id="gps-paused-indicator" class="gps-paused-indicator hidden">GPS paused</div>
+
+        <!-- SPC Regional Risk Card (top-left, below ticker) -->
+        <div id="spc-risk-card" class="spc-risk-card hidden"></div>
+
+        <!-- Guidance Card -->
+        <div id="guidance-card" class="guidance-card hidden"></div>
+
+        <!-- Prediction Card (bottom-right, above legends) -->
+        <div id="prediction-card" class="prediction-card hidden"></div>
+
+        <!-- Bottom-left status stack (single container, no overlap) -->
+        <div id="status-stack" class="status-stack">
+            <div id="radar-error" class="radar-error hidden">
+                <span class="radar-error-msg">Radar unavailable</span>
+                <button onclick="RadarManager.retryRadar()" class="radar-retry-btn">Retry</button>
+            </div>
+            <div id="autotrack-badge" class="autotrack-badge hidden"></div>
+            <div id="audio-follow-strip" class="audio-follow-strip hidden"></div>
+            <div id="audio-test-indicator" class="audio-test-indicator"></div>
+            <div id="source-labels" class="source-labels hidden"></div>
+        </div>
 
         <!-- Validation Panel -->
         <div id="validation-panel" class="validation-panel hidden">
@@ -136,62 +205,115 @@
             </div>
         </div>
 
+        <!-- Floating alert cards (visible when panel closed) -->
+        <div id="alert-float-stack" class="alert-float-stack hidden"></div>
+
+        <!-- Collapsed Auto Track Rail (visible when panel closed + AT active) -->
+        <div id="at-collapsed-rail" class="at-collapsed-rail hidden"></div>
+        <!-- AT Expiry Bar + Places List (below ticker) -->
+        <!-- AT expiry bar moved to per-card in alert panel -->
+        <div id="at-expiry-bar" class="at-expiry-bar hidden" style="display:none"></div>
+        <div id="at-places-list" class="at-places-list hidden"></div>
+
         <!-- Alert Side Panel -->
-        <div id="alert-panel" class="panel-open">
-            <!-- Storm Alerts (Detection Engine) -->
-            <div id="storm-alert-section">
-                <div class="sa-section-header">
-                    <h3>Storm Alerts <span id="storm-alert-count" class="badge">0</span> <span id="ws-status" class="ws-indicator ws-disconnected" title="Live updates"></span> <button id="btn-sound-toggle" class="sound-toggle" title="Alert sound">🔔</button> <button id="btn-notify-toggle" class="sound-toggle" title="Browser notifications">🔇</button></h3>
+        <div id="alert-panel" class="panel-closed">
+            <!-- Storm Alerts (primary section — hidden until data) -->
+            <div id="storm-alert-section" class="hidden">
+                <div class="sa-section-header sa-primary">
+                    <h3>Storm Alerts <span id="storm-alert-count" class="badge">0</span> <span id="ws-status" class="ws-indicator ws-disconnected" title="Live updates"></span></h3>
                 </div>
                 <div id="alert-location-source" class="alert-loc-source">Default location</div>
-                <div id="storm-alert-list">
-                    <div class="storm-alert-empty">No active storm alerts</div>
-                </div>
+                <div id="storm-alert-list"></div>
             </div>
 
-            <div id="panel-header">
-                <h2>NWS Alerts <span id="alert-count" class="badge">0</span></h2>
-                <div id="sort-controls">
-                    <label>Sort:</label>
-                    <select id="sort-field">
-                        <option value="severity" selected>Severity</option>
-                        <option value="distance">Distance</option>
-                        <option value="issued">Issued</option>
-                        <option value="expiration">Expiration</option>
-                    </select>
-                    <button id="btn-sort-order" title="Toggle sort order">&#9660;</button>
+            <div id="panel-section-divider" class="panel-section-divider hidden"></div>
+
+            <!-- NWS Alerts (supporting section — hidden until data) -->
+            <div id="nws-alert-section" class="hidden">
+                <div id="panel-header" class="nws-section-header">
+                    <h2>NWS Alerts <span id="alert-count" class="badge">0</span></h2>
                 </div>
-                <div id="filter-controls">
-                    <button class="filter-btn active" data-category="">All</button>
-                    <button class="filter-btn" data-category="primary">Primary</button>
-                    <button class="filter-btn" data-category="secondary">Secondary</button>
-                    <span class="filter-sep">|</span>
-                    <button id="btn-warnings-toggle" class="filter-btn filter-btn-warn" title="Tornado + Severe T-Storm warnings only">Warnings</button>
-                    <button id="btn-marine-toggle" class="filter-btn" title="Show/hide marine alerts">Marine</button>
-                </div>
+                <div id="alert-list"></div>
             </div>
-            <div id="alert-list"></div>
+
+            <!-- Unified empty state (shown when neither section has data) -->
+            <div id="panel-empty-state" class="panel-empty-state">No active alerts</div>
+
             <!-- Alert Detail Overlay -->
             <div id="alert-detail" class="hidden">
                 <button id="btn-detail-close">&times;</button>
                 <div id="detail-content"></div>
             </div>
         </div>
+        <!-- Clarity Narrative (below alert card) -->
+        <div id="clarity-narrative" class="clarity-narrative"></div>
+        <!-- Mobile Bottom Dock (hidden on desktop via CSS) -->
+        <div id="mobile-dock">
+            <button class="dock-btn dock-at" id="dock-autotrack" title="Auto Track">
+                <span class="dock-icon">&#9678;</span>
+                AT
+            </button>
+            <button class="dock-btn" id="dock-radar" title="Radar layers">
+                <span class="dock-icon">&#9729;</span>
+                RADAR
+            </button>
+            <button class="dock-btn" id="dock-audio" title="Audio controls">
+                <span class="dock-icon">&#9834;</span>
+                AUDIO
+            </button>
+            <button class="dock-btn dock-alert" id="dock-alerts" title="Alert panel">
+                <span class="dock-icon">&#9776;</span>
+                ALERTS
+            </button>
+        </div>
+        <div class="swipe-hint" id="swipe-hint"></div>
+        <!-- Build Version -->
     </div>
 
+    <script>
+        if (!window.__ST_BUILD__) {
+            window.__ST_BUILD__ = 141;
+        }
+    </script>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="/static/js/state.js?v=34"></script>
-    <script src="/static/js/location.js?v=34"></script>
-    <script src="/static/js/map.js?v=34"></script>
-    <script src="/static/js/radar-manager.js?v=34"></script>
-    <script src="/static/js/alert-renderer.js?v=34"></script>
-    <script src="/static/js/alert-panel.js?v=34"></script>
-    <script src="/static/js/storm-audio.js?v=34"></script>
-    <script src="/static/js/storm-notify.js?v=34"></script>
-    <script src="/static/js/storm-alert-panel.js?v=34"></script>
-    <script src="/static/js/feedback.js?v=34"></script>
-    <script src="/static/js/validation.js?v=34"></script>
-    <script src="/static/js/app.js?v=34"></script>
+    <script src="/static/js/st-logger.js?v=141"></script>
+    <script src="/static/js/state.js?v=141"></script>
+    <script src="/static/js/context-selector.js?v=141"></script>
+    <script src="/static/js/location.js?v=141"></script>
+    <script src="/static/js/map.js?v=141"></script>
+    <script src="/static/js/radar-manager.js?v=141"></script>
+    <script src="/static/js/alert-renderer.js?v=141"></script>
+    <script src="/static/js/alert-panel.js?v=141"></script>
+    <script src="/static/js/storm-audio.js?v=141"></script>
+    <script src="/static/js/storm-notify.js?v=141"></script>
+    <script src="/static/js/storm-alert-panel.js?v=141"></script>
+    <script src="/static/js/feedback.js?v=141"></script>
+    <script src="/static/js/camera.js?v=141"></script>
+    <script src="/static/js/unified-target.js?v=141"></script>
+    <script src="/static/js/autotrack.js?v=141"></script>
+    <script src="/static/js/audio-announce.js?v=141"></script>
+    <script src="/static/js/audio-sources-lookup.js?v=141"></script>
+    <script src="/static/js/audio-follow.js?v=141"></script>
+    <script src="/static/js/alert-float.js?v=141"></script>
+    <script src="/static/js/at-places.js?v=141"></script>
+    <script src="/static/js/context-ranking.js?v=141"></script>
+    <script src="/static/js/threat-focus-engine.js?v=141"></script>
+    <script src="/static/js/context-pulse.js?v=141"></script>
+    <script src="/static/js/pulse-cards.js?v=141"></script>
+    <script src="/static/js/at-switch-sound.js?v=141"></script>
+    <script src="/static/js/autotrack-debug.js?v=141"></script>
+    <script src="/static/js/session-persist.js?v=141"></script>
+    <script src="/static/js/clarity-layer.js?v=141"></script>
+    <script src="/static/js/system-status.js?v=141"></script>
+    <script src="/static/js/guidance-card.js?v=141"></script>
+    <script src="/static/js/spc-overlay.js?v=141"></script>
+    <script src="/static/js/prediction-card.js?v=141"></script>
+    <script src="/static/js/prediction-overlay.js?v=141"></script>
+    <script src="/static/js/log-viewer.js?v=141"></script>
+    <script src="/static/js/settings.js?v=141"></script>
+    <script src="/static/js/mobile-gestures.js?v=141"></script>
+    <script src="/static/js/validation.js?v=141"></script>
+    <script src="/static/js/app.js?v=141"></script>
     <script>
         if ("serviceWorker" in navigator) {
             navigator.serviceWorker.register("/static/sw.js").catch(() => {});

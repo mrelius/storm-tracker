@@ -85,6 +85,9 @@ class StormAlert:
     bearing_deg: float = 0.0
     direction: str = "unknown"
 
+    # Source NWS alert (for bridge matching)
+    nws_alert_id: str = ""
+
     # Motion (from tracker)
     trend: str = "unknown"        # closing, departing, unknown
     speed_mph: float = 0.0
@@ -115,6 +118,7 @@ class StormAlert:
 
 def _update_alert_fields(alert: StormAlert, event: DetectionEvent):
     """Update an existing alert's location/motion/confidence fields from a detection event."""
+    alert.nws_alert_id = event.nws_alert_id
     alert.lat = event.lat
     alert.lon = event.lon
     alert.distance_mi = event.distance_mi
@@ -186,6 +190,7 @@ def create_alert_from_event(event: DetectionEvent) -> StormAlert:
     return StormAlert(
         alert_id=_alert_key(event.storm_id, event.type.value),
         storm_id=event.storm_id,
+        nws_alert_id=event.nws_alert_id,
         type=event.type.value,
         severity=event.severity,
         title=template["title"],

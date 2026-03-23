@@ -1,3 +1,6 @@
+import time
+import os
+import resource
 from fastapi import APIRouter
 from models import HealthOut
 from db import get_connection
@@ -36,3 +39,125 @@ async def health_check():
         alert_count=alert_count,
         cache_stats=cache.get_stats(),
     )
+
+
+@router.get("/deep")
+async def deep_health():
+    """Extended health check covering all subsystems including prediction engine."""
+    now = time.time()
+    subsystems = {}
+
+    # Core
+    db_ok = True
+    try:
+        db = await get_connection()
+        row = await db.execute("SELECT COUNT(*) FROM alerts")
+        result = await row.fetchone()
+        alert_count = result[0] if result else 0
+        await db.close()
+        subsystems["db"] = {"status": "ok", "alerts": alert_count}
+    except Exception as e:
+        db_ok = False
+        subsystems["db"] = {"status": "error", "error": str(e)[:100]}
+
+    subsystems["cache"] = {
+        "status": "ok" if cache.is_available() else "unavailable",
+        "stats": cache.get_stats(),
+    }
+
+    # NWS ingest
+    last_poll = get_last_poll()
+    nws_age = (now - last_poll.timestamp()) if last_poll else None
+    from services.nws_ingest import get_expired_stats
+    exp_stats = get_expired_stats()
+    subsystems["nws_ingest"] = {
+        "status": "ok" if last_poll and nws_age < 180 else "degraded" if last_poll else "unavailable",
+        "last_poll": last_poll.isoformat() if last_poll else None,
+        "age_sec": round(nws_age) if nws_age else None,
+        "expired_rejected_last_cycle": exp_stats["expired_rejected_last_cycle"],
+        "expired_rejected_total": exp_stats["expired_rejected_total"],
+    }
+
+    # Alert watchdog
+    try:
+        from services.alert_watchdog import get_status as get_wd_status
+        subsystems["alert_watchdog"] = get_wd_status()
+    except Exception as e:
+        subsystems["alert_watchdog"] = {"status": "unavailable", "error": str(e)[:100]}
+
+    # SPC ingest
+    try:
+        from services.prediction.spc_ingest import get_spc_data
+        spc = get_spc_data()
+        spc_age = now - spc["last_poll"] if spc["last_poll"] else None
+        subsystems["spc_ingest"] = {
+            "status": "ok" if spc_age and spc_age < 300 else "degraded" if spc["last_poll"] else "unavailable",
+            "last_poll_age_sec": round(spc_age) if spc_age else None,
+            "outlook_features": len(spc["outlook"]["features"]) if spc.get("outlook") else 0,
+            "watches": len(spc.get("watches", [])),
+            "mesoscale": len(spc.get("mesoscale", [])),
+            "recent_errors": len(spc.get("errors", [])),
+        }
+    except Exception as e:
+        subsystems["spc_ingest"] = {"status": "error", "error": str(e)[:100]}
+
+    # Environment context
+    try:
+        from services.prediction.model_context import get_environment_context
+        env = get_environment_context()
+        if env:
+            subsystems["environment"] = {
+                "status": "ok" if env["data_age_sec"] < 600 else "stale",
+                "category": env["category"],
+                "stations": env["stations_used"],
+                "age_sec": env["data_age_sec"],
+            }
+        else:
+            subsystems["environment"] = {"status": "unavailable"}
+    except Exception as e:
+        subsystems["environment"] = {"status": "error", "error": str(e)[:100]}
+
+    # Detection engine
+    try:
+        from services.detection.alert_service import get_snapshot
+        snap = get_snapshot()
+        if snap:
+            subsystems["detection"] = {
+                "status": "ok",
+                "active_alerts": snap.get("count", 0),
+                "cycle_status": snap.get("cycle_status", "unknown"),
+            }
+        else:
+            subsystems["detection"] = {"status": "unavailable"}
+    except Exception:
+        subsystems["detection"] = {"status": "unavailable"}
+
+    # Process metrics
+    try:
+        ru = resource.getrusage(resource.RUSAGE_SELF)
+        rss_mb = ru.ru_maxrss / 1024  # Linux: KB → MB
+        subsystems["process"] = {
+            "rss_mb": round(rss_mb, 1),
+            "user_cpu_sec": round(ru.ru_utime, 1),
+            "sys_cpu_sec": round(ru.ru_stime, 1),
+            "pid": os.getpid(),
+        }
+    except Exception:
+        subsystems["process"] = {"status": "unavailable"}
+
+    # Overall status
+    statuses = [s.get("status", "ok") for s in subsystems.values()]
+    if "error" in statuses:
+        overall = "degraded"
+    elif "unavailable" in statuses:
+        overall = "degraded"
+    elif "stale" in statuses:
+        overall = "degraded"
+    else:
+        overall = "ok"
+
+    return {
+        "status": overall,
+        "subsystems": subsystems,
+        "timestamp": now,
+    }

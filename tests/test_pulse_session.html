@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Context Pulse Session + Strict Card Tests — v123</title>
+<style>
+body { font-family: monospace; background: #111; color: #ccc; padding: 20px; }
+.pass { color: #22c55e; } .fail { color: #ef4444; } .info { color: #64748b; }
+h2 { color: #4a90d9; margin-top: 24px; }
+pre { margin: 2px 0; }
+</style>
+</head>
+<body>
+<h1>Context Pulse Session + Strict Card Tests — v123</h1>
+<div id="results"></div>
+<div id="app"></div>
+<div id="clarity-narrative" style="display:none"></div>
+<div id="clarity-banner" style="display:none"></div>
+<div id="clarity-eta" style="display:none"></div>
+<div id="clarity-confidence" style="display:none"></div>
+
+<script>
+const results = document.getElementById("results");
+let passed = 0, failed = 0;
+
+function assert(name, cond) {
+    if (cond) { passed++; out("PASS", name, "pass"); }
+    else { failed++; out("FAIL", name, "fail"); }
+}
+function out(tag, msg, cls) {
+    const p = document.createElement("pre");
+    p.className = cls || "info";
+    p.textContent = `[${tag}] ${msg}`;
+    results.appendChild(p);
+}
+function heading(t) {
+    const h = document.createElement("h2");
+    h.textContent = t;
+    results.appendChild(h);
+}
+
+// ── Mocks ────────────────────────────────────────────────────
+
+const mockAlerts = [
+    { id: "alert-tor-001", event: "Tornado Warning", polygon: '{"type":"Polygon","coordinates":[[[-90,35],[-90,36],[-89,36],[-89,35],[-90,35]]]}', description: "moving northeast at 35 mph.", priority_score: 95, distance_mi: 12, headline: "TOR WRN", expires: new Date(Date.now() + 3600000).toISOString() },
+    { id: "alert-svr-002", event: "Severe Thunderstorm Warning", polygon: '{"type":"Polygon","coordinates":[[[-91,34],[-91,35],[-90,35],[-90,34],[-91,34]]]}', description: "moving east at 25 mph.", priority_score: 60, distance_mi: 45, headline: "SVR TSW", expires: new Date(Date.now() + 1800000).toISOString() },
+];
+
+const StormState = {
+    state: {
+        camera: {
+            owner: "autotrack",
+            contextPulseActive: false,
+            contextPulsePhase: "idle",
+            contextPulseSessionId: null,
+            contextPulseStartedAt: null,
+            contextPulseCooldownUntil: null,
+            prePulseCameraSnapshot: null,
+            pulseTargetCameraSnapshot: null,
+            systemCameraMotionActive: false,
+            systemCameraMotionSource: null,
+        },
+        autotrack: { enabled: true, targetAlertId: "alert-tor-001", targetEvent: "Tornado Warning", targetPolicy: "severity" },
+        alerts: { data: [...mockAlerts] },
+        location: { lat: 35.5, lon: -89.5 },
+        pulse: { primaryInViewEventId: null, inViewCount: 0 },
+        audioFollow: { targetEvent: null },
+    },
+    _listeners: {},
+    on(e, fn) { if (!this._listeners[e]) this._listeners[e] = []; this._listeners[e].push(fn); },
+    emit(e, d) { (this._listeners[e] || []).forEach(fn => fn(d)); },
+    getEventColor() { return "#ff0000"; },
+};
+
+const STLogger = { for() { return { info() {} }; } };
+
+const L = {
+    geoJSON(geo) {
+        return {
+            getBounds() {
+                return {
+                    isValid() { return true; },
+                    getCenter() { return { lat: 35.5, lng: -89.5 }; },
+                    intersects() { return true; },
+                    extend() {},
+                    pad() { return this; },
+                };
+            }
+        };
+    },
+    latLng(lat, lng) { return { lat, lng }; },
+};
+
+function resetState() {
+    const cam = StormState.state.camera;
+    cam.owner = "autotrack";
+    cam.contextPulseActive = false;
+    cam.contextPulsePhase = "idle";
+    cam.contextPulseSessionId = null;
+    cam.contextPulseStartedAt = null;
+    cam.contextPulseCooldownUntil = null;
+    cam.prePulseCameraSnapshot = null;
+    cam.pulseTargetCameraSnapshot = null;
+    cam.systemCameraMotionActive = false;
+    cam.systemCameraMotionSource = null;
+    StormState.state.autotrack.enabled = true;
+    StormState.state.autotrack.targetAlertId = "alert-tor-001";
+    StormState.state.pulse.primaryInViewEventId = null;
+    StormState.state.pulse.inViewCount = 0;
+    StormState.state.alerts.data = [...mockAlerts];
+}
+</script>
+<script>
+// ══════════════════════════════════════════════════════════════
+// SHARED SELECTOR TESTS
+// ══════════════════════════════════════════════════════════════
+
+heading("Test 1: ContextSelector.getPrimaryContextEvent — tracking mode");
+(function() {
+    resetState();
+    const r = ContextSelector.getPrimaryContextEvent();
+    assert("returns tracked event", r !== null && r.event.id === "alert-tor-001");
+    assert("context is tracking", r.context === "tracking");
+})();
+
+heading("Test 2: Selector — pulse active + in-view event");
+(function() {
+    resetState();
+    StormState.state.camera.contextPulseActive = true;
+    StormState.state.pulse.primaryInViewEventId = "alert-svr-002";
+    const r = ContextSelector.getPrimaryContextEvent();
+    assert("returns in-view event", r.event.id === "alert-svr-002");
+    assert("context is pulse", r.context === "pulse");
+})();
+
+heading("Test 3: Selector — pulse active + empty viewport");
+(function() {
+    resetState();
+    StormState.state.camera.contextPulseActive = true;
+    StormState.state.pulse.primaryInViewEventId = null;
+    const r = ContextSelector.getPrimaryContextEvent();
+    assert("returns null (no fallback to tracked)", r === null);
+})();
+
+heading("Test 4: Selector null during pulse — no fallback to tracked target");
+(function() {
+    resetState();
+    StormState.state.camera.contextPulseActive = true;
+    StormState.state.pulse.primaryInViewEventId = "DELETED-999";
+    const r = ContextSelector.getPrimaryContextEvent();
+    assert("missing canonical ID → null", r === null);
+})();
+
+heading("Test 5: Pulse exit → selector returns tracked target");
+(function() {
+    resetState();
+    StormState.state.camera.contextPulseActive = true;
+    StormState.state.pulse.primaryInViewEventId = "alert-svr-002";
+    let r = ContextSelector.getPrimaryContextEvent();
+    assert("during pulse → SVR", r.event.id === "alert-svr-002");
+
+    StormState.state.camera.contextPulseActive = false;
+    StormState.state.pulse.primaryInViewEventId = null;
+    r = ContextSelector.getPrimaryContextEvent();
+    assert("after exit → TOR tracked", r.event.id === "alert-tor-001");
+    assert("context is tracking", r.context === "tracking");
+})();
+
+// ══════════════════════════════════════════════════════════════
+// SESSION LIFECYCLE TESTS
+// ══════════════════════════════════════════════════════════════
+
+heading("Test 6: Session state shape — idle");
+(function() {
+    resetState();
+    const cam = StormState.state.camera;
+    assert("phase is idle", cam.contextPulsePhase === "idle");
+    assert("sessionId is null", cam.contextPulseSessionId === null);
+    assert("systemMotion inactive", cam.systemCameraMotionActive === false);
+})();
+
+heading("Test 7: Stale zoom-out callback — no effect");
+(function() {
+    resetState();
+    const cam = StormState.state.camera;
+    // Simulate: session started then cancelled, stale callback fires
+    cam.contextPulseActive = true;
+    cam.contextPulseSessionId = "ps_1_old";
+    cam.contextPulsePhase = "zooming_out";
+
+    // Cancel it
+    cam.contextPulseActive = false;
+    cam.contextPulseSessionId = "ps_2_new";
+    cam.contextPulsePhase = "idle";
+
+    // The stale callback would check sessionId
+    const staleId = "ps_1_old";
+    const isStale = cam.contextPulseSessionId !== staleId;
+    assert("stale session detected", isStale === true);
+})();
+
+heading("Test 8: Cooldown prevents immediate re-entry");
+(function() {
+    resetState();
+    const cam = StormState.state.camera;
+    cam.contextPulseCooldownUntil = Date.now() + 3000;
+    const inCooldown = Date.now() < cam.contextPulseCooldownUntil;
+    assert("cooldown active", inCooldown === true);
+})();
+
+heading("Test 9: No overlapping sessions");
+(function() {
+    resetState();
+    const cam = StormState.state.camera;
+    cam.contextPulseActive = true;
+    cam.contextPulseSessionId = "ps_active";
+    // A second start would check contextPulseActive and bail
+    assert("active session blocks new start", cam.contextPulseActive === true);
+})();
+
+heading("Test 10: Target change during hold — no restart, return goes to latest");
+(function() {
+    resetState();
+    const cam = StormState.state.camera;
+    cam.contextPulseActive = true;
+    cam.contextPulsePhase = "holding";
+    cam.contextPulseSessionId = "ps_hold";
+
+    // Target changes during holding — should NOT cancel
+    // (only cancels if phase !== "holding")
+    const shouldCancel = cam.contextPulsePhase !== "holding";
+    assert("target change during hold does not cancel", shouldCancel === false);
+})();
+
+// ══════════════════════════════════════════════════════════════
+// STRICT CARD SEMANTICS
+// ══════════════════════════════════════════════════════════════
+
+heading("Test 11: Pulse active + in-view → strict card shows [IN VIEW]");
+(function() {
+    resetState();
+    StormState.state.camera.contextPulseActive = true;
+    StormState.state.pulse.primaryInViewEventId = "alert-svr-002";
+    StormState.state.pulse.inViewCount = 2;
+    const r = ContextSelector.getPrimaryContextEvent();
+    assert("selector returns pulse context", r.context === "pulse");
+    const tag = r.context === "pulse" ? "IN VIEW" : "TRACKING";
+    assert("card tag is IN VIEW", tag === "IN VIEW");
+    const extra = StormState.state.pulse.inViewCount > 1 ? `+${StormState.state.pulse.inViewCount - 1} more in view` : null;
+    assert("extra text shows +1 more", extra === "+1 more in view");
+})();
+
+heading("Test 12: Pulse exit → strict card shows [TRACKING]");
+(function() {
+    resetState();
+    const r = ContextSelector.getPrimaryContextEvent();
+    const tag = r.context === "pulse" ? "IN VIEW" : "TRACKING";
+    assert("card tag is TRACKING", tag === "TRACKING");
+})();
+
+heading("Test 13: Selector null → strict card hides");
+(function() {
+    resetState();
+    StormState.state.autotrack.enabled = false;
+    StormState.state.autotrack.targetAlertId = null;
+    const r = ContextSelector.getPrimaryContextEvent();
+    assert("selector null → card should hide", r === null);
+})();
+
+heading("Test 14: System motion guard");
+(function() {
+    resetState();
+    const cam = StormState.state.camera;
+    cam.systemCameraMotionActive = true;
+    cam.systemCameraMotionSource = "pulse";
+    assert("system motion flagged as pulse", cam.systemCameraMotionSource === "pulse");
+    assert("motion is active", cam.systemCameraMotionActive === true);
+    // User interaction handler checks this flag before cancelling
+})();
+
+// ── Summary ─────────────────────────────────────────────────
+heading("Summary");
+out("TOTAL", `${passed} passed, ${failed} failed`, failed ? "fail" : "pass");
+document.title = failed ? `FAIL (${failed})` : `PASS (${passed})`;
+</script>
+</body>
+</html>

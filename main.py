@@ -1,5 +1,6 @@
 import asyncio
 import time
+import uuid
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -10,8 +11,12 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 
 from fastapi.requests import Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from typing import Optional
 
 from config import get_settings
+from logging_config import setup_logging, get_logger, request_id_var
 from db import init_db, seed_counties
 import cache
 from services.nws_ingest import run_ingest_loop, stop_ingest
@@ -21,11 +26,11 @@ from services.radar.rainviewer import RainViewerProvider
 from services.radar.iem import IEMRadarProvider
 from services.radar.nexrad_cc import NexradCCProvider
 from fastapi import WebSocket, WebSocketDisconnect
-from routers import alerts, radar, location, health, detections, storm_alerts, feedback
+from routers import alerts, radar, location, health, detections, storm_alerts, feedback, prediction, spc, guidance
 
 settings = get_settings()
-logging.basicConfig(level=settings.log_level, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
-logger = logging.getLogger(__name__)
+setup_logging(settings.log_level)
+logger = get_logger("main")
 
 _ingest_task: asyncio.Task | None = None
 _alert_task: asyncio.Task | None = None
@@ -48,6 +53,12 @@ async def lifespan(app: FastAPI):
     # Start background tasks
     _ingest_task = asyncio.create_task(run_ingest_loop())
     _alert_task = asyncio.create_task(run_alert_loop())
+
+    from services.prediction.spc_ingest import run_spc_loop, stop_spc
+    from services.prediction.model_context import run_environment_loop, stop_environment
+    _spc_task = asyncio.create_task(run_spc_loop())
+    _env_task = asyncio.create_task(run_environment_loop())
+
     logger.info("Storm Tracker started")
 
     yield
@@ -55,7 +66,9 @@ async def lifespan(app: FastAPI):
     # Shutdown
     stop_ingest()
     stop_alert_loop()
-    for task in [_ingest_task, _alert_task]:
+    stop_spc()
+    stop_environment()
+    for task in [_ingest_task, _alert_task, _spc_task, _env_task]:
         if task:
             task.cancel()
             try:
@@ -73,18 +86,27 @@ app = FastAPI(
 )
 
 
-class RequestTimingMiddleware(BaseHTTPMiddleware):
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    """Assigns a short request ID and logs API request timing."""
     async def dispatch(self, request: Request, call_next):
+        rid = uuid.uuid4().hex[:8]
+        request_id_var.set(rid)
+
         if request.url.path.startswith("/api/"):
             start = time.monotonic()
             response = await call_next(request)
             elapsed_ms = (time.monotonic() - start) * 1000
-            logger.info(f"{request.method} {request.url.path} → {response.status_code} ({elapsed_ms:.1f}ms)")
+            logger.info("api_request",
+                method=request.method,
+                path=request.url.path,
+                status=response.status_code,
+                elapsed_ms=round(elapsed_ms, 1))
+            response.headers["X-Request-ID"] = rid
             return response
         return await call_next(request)
 
 
-app.add_middleware(RequestTimingMiddleware)
+app.add_middleware(RequestIDMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=500)  # gzip responses > 500 bytes
 
 # Mount routers
@@ -95,6 +117,9 @@ app.include_router(health.router)
 app.include_router(detections.router)
 app.include_router(storm_alerts.router)
 app.include_router(feedback.router)
+app.include_router(prediction.router)
+app.include_router(spc.router)
+app.include_router(guidance.router)
 
 _sim_last_call = 0
 _SIM_RATE_LIMIT = 5  # seconds between simulate calls
@@ -290,6 +315,130 @@ async def storm_alerts_ws(ws: WebSocket):
         manager.disconnect(ws)
     except Exception:
         manager.disconnect(ws)
+
+
+# ── Phase 2: Client telemetry endpoint ───────────────────────────
+_client_logger = get_logger("client")
+_client_dedup: dict[str, float] = {}  # key → last_time for dedup
+_CLIENT_DEDUP_WINDOW = 10  # seconds
+_CLIENT_MAX_PAYLOAD = 2048  # chars
+
+
+class ClientLogEntry(BaseModel):
+    level: str = "info"
+    module: str = "unknown"
+    event: str = ""
+    message: str = ""
+    extra: Optional[dict] = None
+
+
+@app.post("/api/logs/client")
+async def receive_client_log(entry: ClientLogEntry):
+    """Receive structured log from frontend. Validates, deduplicates, and persists."""
+    # Validate level
+    level = entry.level.upper()
+    if level not in ("DEBUG", "INFO", "WARN", "WARNING", "ERROR"):
+        level = "INFO"
+
+    # Cap payload size
+    msg = (entry.message or entry.event)[:_CLIENT_MAX_PAYLOAD]
+
+    # Dedup: same module+event within window
+    dedup_key = f"{entry.module}:{entry.event}"
+    now = time.time()
+    last = _client_dedup.get(dedup_key, 0)
+    if now - last < _CLIENT_DEDUP_WINDOW:
+        return {"status": "throttled"}
+    _client_dedup[dedup_key] = now
+
+    # Prune old dedup entries (keep < 200)
+    if len(_client_dedup) > 200:
+        cutoff = now - _CLIENT_DEDUP_WINDOW * 2
+        _client_dedup.clear()
+
+    # Sanitize extra
+    extra = {}
+    if entry.extra and isinstance(entry.extra, dict):
+        # Limit extra to 10 keys, string values capped at 500 chars
+        for k, v in list(entry.extra.items())[:10]:
+            extra[str(k)[:50]] = str(v)[:500]
+
+    # Log through structured pipeline
+    log_fn = getattr(_client_logger, level.lower().replace("warning", "warn"), _client_logger.info)
+    log_fn(entry.event or "client_event",
+           client_module=entry.module,
+           client_level=level,
+           message=msg,
+           **extra)
+
+    return {"status": "ok"}
+
+
+# ── Phase 3: Log viewer endpoint ─────────────────────────────────
+@app.get("/api/logs")
+async def get_logs(
+    level: Optional[str] = None,
+    module: Optional[str] = None,
+    search: Optional[str] = None,
+    minutes: int = 15,
+    limit: int = 200,
+):
+    """Retrieve recent structured logs from the rotating log file.
+    Filters by level, module, and text search. Returns newest first."""
+    import json as _json
+    from logging_config import LOG_FILE
+
+    if not LOG_FILE.exists():
+        return {"logs": [], "total": 0, "file": str(LOG_FILE)}
+
+    results = []
+    cutoff_ts = time.time() - (minutes * 60)
+
+    try:
+        with open(LOG_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = _json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+
+                # Time filter
+                ts_str = entry.get("ts", "")
+                if ts_str:
+                    from datetime import datetime, timezone
+                    try:
+                        ts = datetime.fromisoformat(ts_str).timestamp()
+                        if ts < cutoff_ts:
+                            continue
+                    except (ValueError, TypeError):
+                        pass
+
+                # Level filter
+                if level and entry.get("level", "").upper() != level.upper():
+                    continue
+
+                # Module filter
+                if module and module.lower() not in entry.get("module", "").lower():
+                    continue
+
+                # Text search
+                if search:
+                    search_lower = search.lower()
+                    searchable = f"{entry.get('event', '')} {entry.get('message', '')} {entry.get('module', '')}".lower()
+                    if search_lower not in searchable:
+                        continue
+
+                results.append(entry)
+        # Newest first, capped
+        results = results[-limit:]
+        results.reverse()
+    except (OSError, PermissionError) as e:
+        return {"logs": [], "total": 0, "error": str(e)}
+
+    return {"logs": results, "total": len(results)}
 
 
 app.mount("/data", StaticFiles(directory="data"), name="data")

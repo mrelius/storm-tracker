@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Interpretation Layer Unified Tests — v122</title>
+<style>
+body { font-family: monospace; background: #111; color: #ccc; padding: 20px; }
+.pass { color: #22c55e; } .fail { color: #ef4444; } .info { color: #64748b; }
+h2 { color: #4a90d9; margin-top: 24px; }
+pre { margin: 2px 0; }
+</style>
+</head>
+<body>
+<h1>Interpretation Layer Tests — v122 (hardened semantics)</h1>
+<div id="results"></div>
+
+<!-- DOM stubs -->
+<div id="clarity-narrative" style="display:none"></div>
+<div id="clarity-banner" style="display:none"></div>
+<div id="clarity-eta" style="display:none"></div>
+<div id="clarity-confidence" style="display:none"></div>
+<div id="app"></div>
+
+<script>
+const results = document.getElementById("results");
+let passed = 0, failed = 0;
+
+function assert(name, condition) {
+    if (condition) { passed++; log("PASS", name, "pass"); }
+    else { failed++; log("FAIL", name, "fail"); }
+}
+function log(tag, msg, cls) {
+    const p = document.createElement("pre");
+    p.className = cls || "info";
+    p.textContent = `[${tag}] ${msg}`;
+    results.appendChild(p);
+}
+function heading(t) {
+    const h = document.createElement("h2");
+    h.textContent = t;
+    results.appendChild(h);
+}
+
+// ── Mock Infrastructure ─────────────────────────────────────
+
+const mockAlerts = [
+    { id: "alert-tor-001", event: "Tornado Warning", polygon: '{"type":"Polygon","coordinates":[[[-90,35],[-90,36],[-89,36],[-89,35],[-90,35]]]}', description: "moving northeast at 35 mph. 1.5 inch hail.", priority_score: 95, distance_mi: 12, headline: "Tornado Warning until 4pm", expires: new Date(Date.now() + 3600000).toISOString() },
+    { id: "alert-svr-002", event: "Severe Thunderstorm Warning", polygon: '{"type":"Polygon","coordinates":[[[-91,34],[-91,35],[-90,35],[-90,34],[-91,34]]]}', description: "moving east at 25 mph. 60 mph winds.", priority_score: 60, distance_mi: 45, headline: "SVR Warning", expires: new Date(Date.now() + 1800000).toISOString() },
+    { id: "alert-ffw-003", event: "Flash Flood Warning", polygon: null, description: "Flooding expected.", priority_score: 20, distance_mi: 8, headline: "FFW", expires: new Date(Date.now() + 7200000).toISOString() },
+];
+
+const StormState = {
+    state: {
+        camera: { owner: "autotrack", contextPulseActive: false },
+        autotrack: { enabled: true, targetAlertId: "alert-tor-001", targetEvent: "Tornado Warning", targetPolicy: "severity" },
+        alerts: { data: [...mockAlerts] },
+        location: { lat: 35.5, lon: -89.5 },
+        pulse: { primaryInViewEventId: null, inViewCount: 0 },
+    },
+    _listeners: {},
+    on(e, fn) { if (!this._listeners[e]) this._listeners[e] = []; this._listeners[e].push(fn); },
+    emit(e, d) { (this._listeners[e] || []).forEach(fn => fn(d)); },
+    getEventColor(e) { return "#ff0000"; },
+};
+
+const logEmissions = [];
+const STLogger = {
+    for(name) {
+        return {
+            info(evt, data) {
+                logEmissions.push({ logger: name, event: evt, data: { ...data } });
+            }
+        };
+    }
+};
+
+const L = {
+    geoJSON(geo) {
+        return {
+            getBounds() {
+                return {
+                    isValid() { return true; },
+                    getCenter() { return { lat: 35.5, lng: -89.5 }; },
+                    intersects() { return true; },
+                };
+            }
+        };
+    }
+};
+
+function resetState() {
+    StormState.state.camera.contextPulseActive = false;
+    StormState.state.autotrack.enabled = true;
+    StormState.state.autotrack.targetAlertId = "alert-tor-001";
+    StormState.state.pulse.primaryInViewEventId = null;
+    StormState.state.pulse.inViewCount = 0;
+    StormState.state.alerts.data = [...mockAlerts];
+    logEmissions.length = 0;
+}
+</script>
+<script>
+// ══════════════════════════════════════════════════════════════
+// SELECTOR + BANNER MODE TESTS
+// ══════════════════════════════════════════════════════════════
+
+// ── Test 1: selector null + alerts[0] exists → banner passive, strict surfaces hidden
+heading("Test 1: selector null + alerts exist → banner passive, strict surfaces hidden");
+
+(function() {
+    resetState();
+    StormState.state.autotrack.enabled = false;
+    StormState.state.autotrack.targetAlertId = null;
+
+    const result = ClarityLayer.getPrimaryContextEvent();
+    assert("selector returns null (no AT, no pulse)", result === null);
+
+    const dbg = ClarityLayer.getDebugState();
+    // After _update runs, banner should be passive. Force an update cycle:
+    // We can't call _update directly, but getDebugState reads live state.
+    // The selector returns null → primary is null → banner falls back to alerts[0]
+    assert("getDebugState exposes primaryContextMode: none", dbg.primaryContextMode === "none");
+    assert("getDebugState exposes primaryContextEventId: null", dbg.primaryContextEventId === null);
+})();
+
+// ── Test 2: selector null + no alerts → banner none, no stale data
+heading("Test 2: selector null + no alerts → banner shows none");
+
+(function() {
+    resetState();
+    StormState.state.autotrack.enabled = false;
+    StormState.state.autotrack.targetAlertId = null;
+    StormState.state.alerts.data = [];
+
+    const result = ClarityLayer.getPrimaryContextEvent();
+    assert("selector null with empty alerts", result === null);
+
+    const dbg = ClarityLayer.getDebugState();
+    assert("context mode: none", dbg.primaryContextMode === "none");
+    assert("context event: null", dbg.primaryContextEventId === null);
+})();
+
+// ── Test 3: pulse active + empty viewport → banner passive or calm, strict surfaces null
+heading("Test 3: pulse active + empty viewport → strict surfaces null, correct source mode logged");
+
+(function() {
+    resetState();
+    StormState.state.camera.contextPulseActive = true;
+    StormState.state.pulse.primaryInViewEventId = null;
+    StormState.state.pulse.inViewCount = 0;
+
+    const result = ClarityLayer.getPrimaryContextEvent();
+    assert("selector null during empty-viewport pulse", result === null);
+    assert("no fallback to autotrack target", result === null);
+
+    const dbg = ClarityLayer.getDebugState();
+    assert("context mode: none (pulse active but empty)", dbg.primaryContextMode === "none");
+})();
+
+// ── Test 4: pulse exit → banner returns to context mode
+heading("Test 4: pulse exit → banner source returns to context mode if tracked target exists");
+
+(function() {
+    resetState();
+    // Start in pulse with in-view event
+    StormState.state.camera.contextPulseActive = true;
+    StormState.state.pulse.primaryInViewEventId = "alert-svr-002";
+
+    let result = ClarityLayer.getPrimaryContextEvent();
+    assert("during pulse → SVR in-view", result.event.id === "alert-svr-002");
+    assert("context: pulse", result.context === "pulse");
+
+    // Exit pulse
+    StormState.state.camera.contextPulseActive = false;
+    StormState.state.pulse.primaryInViewEventId = null;
+
+    result = ClarityLayer.getPrimaryContextEvent();
+    assert("after pulse exit → TOR tracked", result.event.id === "alert-tor-001");
+    assert("context: tracking", result.context === "tracking");
+
+    const dbg = ClarityLayer.getDebugState();
+    assert("debug shows tracking mode", dbg.primaryContextMode === "tracking");
+})();
+
+// ── Test 5: event refresh same ID → no false transition log
+heading("Test 5: event refresh with same ID → no false source transition log");
+
+(function() {
+    resetState();
+    logEmissions.length = 0;
+
+    const r1 = ClarityLayer.getPrimaryContextEvent();
+    const r2 = ClarityLayer.getPrimaryContextEvent();
+    assert("same ID returned", r1.event.id === r2.event.id);
+    assert("same context", r1.context === r2.context);
+
+    // Refresh data with new objects but same IDs
+    StormState.state.alerts.data = mockAlerts.map(a => ({ ...a }));
+    const r3 = ClarityLayer.getPrimaryContextEvent();
+    assert("same ID after refresh", r3.event.id === "alert-tor-001");
+})();
+
+// ── Test 6: pulse active + missing canonical ID → all surfaces null
+heading("Test 6: pulse active + missing canonical ID → all surfaces null, no stale fallback");
+
+(function() {
+    resetState();
+    StormState.state.camera.contextPulseActive = true;
+    StormState.state.pulse.primaryInViewEventId = "alert-DELETED-999";
+
+    const result = ClarityLayer.getPrimaryContextEvent();
+    assert("missing ID → null", result === null);
+
+    const dbg = ClarityLayer.getDebugState();
+    assert("context mode: none", dbg.primaryContextMode === "none");
+})();
+
+// ══════════════════════════════════════════════════════════════
+// DEBUG SURFACE TESTS
+// ══════════════════════════════════════════════════════════════
+
+heading("Test 7: getDebugState shape");
+
+(function() {
+    resetState();
+    const dbg = ClarityLayer.getDebugState();
+    assert("has primaryContextEventId", "primaryContextEventId" in dbg);
+    assert("has primaryContextMode", "primaryContextMode" in dbg);
+    assert("has bannerSourceEventId", "bannerSourceEventId" in dbg);
+    assert("has bannerSourceMode", "bannerSourceMode" in dbg);
+
+    // With AT enabled + tracked target
+    assert("context mode is tracking", dbg.primaryContextMode === "tracking");
+    assert("context event is TOR", dbg.primaryContextEventId === "alert-tor-001");
+})();
+
+heading("Test 8: banner source mode transitions");
+
+(function() {
+    // Context mode
+    resetState();
+    let result = ClarityLayer.getPrimaryContextEvent();
+    assert("AT active → context event exists", result !== null);
+
+    // Switch to idle → banner should become passive
+    StormState.state.autotrack.enabled = false;
+    StormState.state.autotrack.targetAlertId = null;
+    result = ClarityLayer.getPrimaryContextEvent();
+    assert("AT off → selector null", result === null);
+
+    // No alerts → banner none
+    StormState.state.alerts.data = [];
+    result = ClarityLayer.getPrimaryContextEvent();
+    assert("no alerts → null", result === null);
+})();
+
+// ══════════════════════════════════════════════════════════════
+// NARRATIVE FORMAT TESTS
+// ══════════════════════════════════════════════════════════════
+
+heading("Test 9: Narrative text format");
+
+(function() {
+    const alert = mockAlerts[0];
+    const loc = { lat: 35.5, lon: -89.5 };
+    const text = ClarityLayer.generateNarrative(alert, loc);
+    assert("includes shelter for TOR", text.includes("Take shelter immediately"));
+    assert("includes hail", text.includes("1.5 inch hail"));
+    assert("includes motion", text.includes("Moving northeast at 35 mph"));
+    assert("ends with period", text.endsWith("."));
+})();
+
+heading("Test 10: tracked differs from in-view during pulse → follows in-view");
+
+(function() {
+    resetState();
+    StormState.state.autotrack.targetAlertId = "alert-tor-001";
+    StormState.state.camera.contextPulseActive = true;
+    StormState.state.pulse.primaryInViewEventId = "alert-svr-002";
+
+    const result = ClarityLayer.getPrimaryContextEvent();
+    assert("pulse overrides AT — returns SVR", result.event.id === "alert-svr-002");
+    assert("context is pulse", result.context === "pulse");
+})();
+
+// ── Summary ─────────────────────────────────────────────────
+heading("Summary");
+log("TOTAL", `${passed} passed, ${failed} failed`, failed ? "fail" : "pass");
+document.title = failed ? `FAIL (${failed})` : `PASS (${passed})`;
+</script>
+</body>
+</html>

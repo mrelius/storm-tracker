@@ -155,6 +155,18 @@ const StormAlertPanel = (function () {
         badge.textContent = alerts.length;
         badge.classList.toggle("badge-urgent", alerts.some(a => a.severity >= 3));
 
+        // Show/hide entire storm alert section based on count
+        const section = document.getElementById("storm-alert-section");
+        if (section) section.classList.toggle("hidden", alerts.length === 0);
+
+        // Update divider + empty state visibility
+        const nwsSection = document.getElementById("nws-alert-section");
+        const nwsHasData = nwsSection && !nwsSection.classList.contains("hidden");
+        const divider = document.getElementById("panel-section-divider");
+        if (divider) divider.classList.toggle("hidden", !(alerts.length > 0 && nwsHasData));
+        const emptyState = document.getElementById("panel-empty-state");
+        if (emptyState) emptyState.classList.toggle("hidden", alerts.length > 0 || nwsHasData);
+
         // Detect disappeared alerts → show brief expired transition
         const currentIds = new Set(alerts.map(a => a.alert_id));
         for (const id of Object.keys(prevAlertSet)) {

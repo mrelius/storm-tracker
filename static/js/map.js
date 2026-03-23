@@ -3,6 +3,7 @@
  */
 const StormMap = (function () {
     let map = null;
+    let baseTile = null;
     let countyLayer = null;
     let countyData = null;
 
@@ -14,8 +15,8 @@ const StormMap = (function () {
             attributionControl: true,
         });
 
-        // Dark basemap (CartoDB Dark Matter)
-        L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+        // Dark basemap (CartoDB Dark Matter) — stored for Settings swap
+        baseTile = L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
             attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://openstreetmap.org/">OSM</a>',
             subdomains: "abcd",
             maxZoom: 19,
@@ -33,10 +34,19 @@ const StormMap = (function () {
             setTimeout(() => map.invalidateSize(), 300);
         });
 
+        // User interaction detection for auto-track pause
+        map.getContainer().addEventListener("mousedown", onUserMapInteraction);
+        map.getContainer().addEventListener("touchstart", onUserMapInteraction);
+        map.getContainer().addEventListener("wheel", onUserMapInteraction);
+
         // Load county boundaries
         loadCounties();
 
         return map;
+    }
+
+    function onUserMapInteraction() {
+        StormState.emit("userMapInteraction");
     }
 
     async function loadCounties() {
@@ -63,7 +73,9 @@ const StormMap = (function () {
                 });
                 layer._fips = feature.id;
             },
-        }).addTo(map);
+        });
+        // Do NOT auto-add to map — controlled by Settings (default off)
+        // Settings.applyAll() will add it if showCountyPolygons is true
     }
 
     function defaultCountyStyle() {
@@ -72,7 +84,7 @@ const StormMap = (function () {
             fillOpacity: 0,
             color: "#1e293b",
             weight: 0.5,
-            opacity: 0.4,
+            opacity: 0.1,
         };
     }
 
@@ -170,5 +182,8 @@ const StormMap = (function () {
         return countyLayer;
     }
 
-    return { init, colorCounties, getMap, getCountyLayer, focusOnAlert, getCenter, onMoveEnd };
+    function getBaseTile() { return baseTile; }
+    function setBaseTile(layer) { baseTile = layer; }
+
+    return { init, colorCounties, getMap, getCountyLayer, focusOnAlert, getCenter, onMoveEnd, getBaseTile, setBaseTile };
 })();

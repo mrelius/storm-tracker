@@ -22,9 +22,11 @@ const StormAudio = (function () {
             updateToggleUI();
         }
 
-        // Try to unlock audio context on first user interaction
-        document.addEventListener("click", unlockAudio, { once: true });
-        document.addEventListener("keydown", unlockAudio, { once: true });
+        // Unlock audio on every user interaction — not { once: true }
+        // because programmatic clicks during session restore can consume
+        // the listener before a real user gesture occurs
+        document.addEventListener("click", unlockAudio);
+        document.addEventListener("keydown", unlockAudio);
     }
 
     function isEnabled() {
@@ -52,13 +54,14 @@ const StormAudio = (function () {
         if (!audioCtx) {
             try {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                if (audioCtx.state === "suspended") {
-                    audioCtx.resume();
-                }
                 autoplayBlocked = false;
             } catch (e) {
                 // Silent — will retry on next interaction
             }
+        }
+        // Always try to resume — handles contexts created during non-gesture calls
+        if (audioCtx && audioCtx.state === "suspended") {
+            audioCtx.resume();
         }
     }
 

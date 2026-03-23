@@ -4,11 +4,22 @@
  */
 const AlertRenderer = (function () {
     let map = null;
-    let polygonLayer = null;  // L.layerGroup for warning polygons
+    let polygonLayer = null;
+
+    // Alert layer visibility (set by Settings)
+    let layerVis = { showPrimary: true, showSecondary: true, showWarnings: true, showMarine: false };
 
     function init(leafletMap) {
         map = leafletMap;
         polygonLayer = L.layerGroup().addTo(map);
+
+        StormState.on("alertLayerVisibilityChanged", (vis) => {
+            layerVis = vis;
+            renderPolygons();
+        });
+
+        // Re-render on tracked target change to update highlight
+        StormState.on("autotrackTargetChanged", () => renderPolygons());
     }
 
     async function fetchAndRender() {
@@ -32,22 +43,31 @@ const AlertRenderer = (function () {
     async function renderPolygons() {
         polygonLayer.clearLayers();
         const alerts = StormState.state.alerts.data;
+        const trackedId = StormState.state.autotrack.targetAlertId;
 
         for (const alert of alerts) {
             if (!alert.polygon) continue;
 
+            // Category visibility filter
+            const cat = alert.category || "";
+            if (cat === "primary" && !layerVis.showPrimary) continue;
+            if (cat === "secondary" && !layerVis.showSecondary) continue;
+            const isMarine = /marine|coastal|surf|rip current|small craft|gale|seas/i.test(alert.event);
+            if (isMarine && !layerVis.showMarine) continue;
+
             try {
                 const geojson = JSON.parse(alert.polygon);
                 const color = StormState.getEventColor(alert.event);
+                const isTracked = trackedId && alert.id === trackedId;
 
                 L.geoJSON(geojson, {
                     style: {
                         color: color,
-                        weight: 2,
-                        opacity: 0.8,
+                        weight: isTracked ? 3 : 1,
+                        opacity: isTracked ? 1.0 : 0.3,
                         fillColor: color,
-                        fillOpacity: 0.15,
-                        dashArray: "5,5",
+                        fillOpacity: isTracked ? 0.25 : 0.05,
+                        dashArray: isTracked ? "" : "5,5",
                     },
                 }).bindPopup(buildPopupHtml(alert))
                   .addTo(polygonLayer);

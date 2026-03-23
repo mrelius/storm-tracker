@@ -59,6 +59,7 @@ class BaseStormCandidate:
     id: str
     lat: float
     lon: float
+    nws_alert_id: str = ""
     reflectivity_dbz: Optional[float] = None
     velocity_delta: Optional[float] = None
     cc_min: Optional[float] = None
@@ -151,10 +152,16 @@ def _build_candidate(alert: dict) -> BaseStormCandidate | None:
     dbz_estimate = SEVERITY_DBZ_ESTIMATE.get(nws_severity)
 
     alert_id = alert.get("id", "unknown")
-    short_id = alert_id.split(".")[-1] if "." in alert_id else alert_id[-8:]
+    # Use hash suffix for a unique short ID (last 8 hex chars before .seq.ver)
+    parts = alert_id.split(".")
+    if len(parts) >= 3:
+        short_id = parts[-3][-8:] + "." + parts[-2]
+    else:
+        short_id = alert_id[-12:]
 
     return BaseStormCandidate(
         id=f"nws_{short_id}",
+        nws_alert_id=alert_id,
         lat=storm_lat,
         lon=storm_lon,
         reflectivity_dbz=dbz_estimate,
@@ -198,6 +205,7 @@ def _track_to_storm(
 
     return StormObject(
         id=track.storm_id,
+        nws_alert_id=track.nws_alert_id,
         lat=track.lat,
         lon=track.lon,
         distance_mi=round(distance, 1),

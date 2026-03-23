@@ -93,6 +93,17 @@ def extract_polygon(geometry: dict | None) -> str | None:
     return json.dumps(geometry)
 
 
+def _normalize_ts(ts_str):
+    """Normalize a timestamp string to UTC ISO format. Returns None on failure."""
+    if not ts_str:
+        return None
+    try:
+        dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (ValueError, TypeError):
+        return ts_str  # return raw if unparseable
+
+
 async def store_alert(alert_feature: dict) -> bool:
     """Store a single NWS alert feature in the database.
 
@@ -104,17 +115,19 @@ async def store_alert(alert_feature: dict) -> bool:
         return False
 
     event = props.get("event", "Unknown")
-    expires = props.get("expires")
-    if not expires:
+    expires_raw = props.get("expires")
+    if not expires_raw:
         return False
 
-    # Skip already-expired alerts
+    # Normalize expires to UTC (NWS sends offsets like -04:00, -05:00)
     try:
-        exp_dt = datetime.fromisoformat(expires.replace("Z", "+00:00"))
-        if exp_dt < datetime.now(timezone.utc):
+        exp_dt = datetime.fromisoformat(expires_raw.replace("Z", "+00:00"))
+        exp_utc = exp_dt.astimezone(timezone.utc)
+        if exp_utc < datetime.now(timezone.utc):
             return False
+        expires = exp_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
     except (ValueError, TypeError):
-        pass
+        expires = expires_raw  # fallback: store raw if parse fails
 
     category = classify_alert(event)
     priority = compute_priority(event)
@@ -123,8 +136,9 @@ async def store_alert(alert_feature: dict) -> bool:
     county_fips = extract_county_fips(geocode)
     now = datetime.now(timezone.utc).isoformat()
 
-    # Ensure onset is never null (NWS test messages can omit it)
-    onset = props.get("onset") or props.get("sent") or now
+    # Normalize onset and issued to UTC
+    onset = _normalize_ts(props.get("onset") or props.get("sent")) or now
+    issued = _normalize_ts(props.get("sent")) or now
 
     db = await get_connection()
     try:
@@ -152,7 +166,7 @@ async def store_alert(alert_feature: dict) -> bool:
                 polygon,
                 onset,
                 expires,
-                props.get("sent", now),
+                issued,
                 props.get("senderName"),
                 priority,
                 now,
@@ -278,11 +292,12 @@ async def _store_polygon(alert_id: str, geom_str: str):
 
 
 async def purge_expired():
-    """Remove alerts past their expiration time."""
-    now = datetime.now(timezone.utc).isoformat()
+    """Remove alerts past their expiration time.
+    Uses UTC-normalized timestamps for correct comparison."""
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     db = await get_connection()
     try:
-        cursor = await db.execute("DELETE FROM alerts WHERE expires < ?", (now,))
+        cursor = await db.execute("DELETE FROM alerts WHERE expires < ?", (now_utc,))
         count = cursor.rowcount
         await db.commit()
         if count:

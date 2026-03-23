@@ -307,6 +307,7 @@ ssh root@10.206.8.121 "cd /opt/cc-radar && rm -rf tiles/ILN/2* && venv/bin/pytho
 | HA integration | Small | Push tornado warnings to Home Assistant |
 | Advanced mode UI toggle | Small | Currently enforced in code only |
 | CC color legend (separate from SRV) | Small | CC uses different color scale than SRV |
+| Collapsed strip: long area name on narrow viewport | Small | Truncation works but could benefit from responsive wrapping or tooltip on hover |
 
 ---
 
@@ -316,6 +317,48 @@ ssh root@10.206.8.121 "cd /opt/cc-radar && rm -rf tiles/ILN/2* && venv/bin/pytho
 |---|---|---|---|
 | v1.0.0 | 2026-03-20 | `c270028` | Phase 1-3: backend, frontend, deploy, radar, alerts, performance, trust signals, zone polygons, polish |
 | v2.0.0 | 2026-03-20 | `a96ebcd` | MRMS CC pipeline, site-based CC via LXC 121, CC toggle, validation mode, SRV bug fix |
+| v3.0.0 | 2026-03-21 | — | Auto Track audio follow, premium animations, CC spam fix, SRV zoom cap, collapsed tracked-alert strip, switch sound |
+
+### v3.0.0 Changelog
+
+**Auto Track Audio Follow** (`audio-follow.js`)
+- Event-driven audio routing: NOAA for tornado warnings, scanner for severe thunderstorm
+- 4 independent timers: stability (9s), debounce (2s), cooldown (5s), grace (12s)
+- Ownership model: manual always wins, tornado overrides immediately
+- Stream availability probes with degraded-source detection
+- UI strip with source/status/countdown progress bar
+- Full debug section in Shift+Alt+D panel
+- Session persistence of enabled state
+
+**Premium Animation Layer**
+- Camera easing: 3 profiles — tornado (700ms), normal (1000ms), reframe (1200ms)
+- Tracked card: scale + glow transition, TRACKING label slide-in
+- Path arrow: SVG stroke draw-in (800ms) + predicted position shimmer
+- Badge: acquisition pulse (blue/purple by mode)
+- Radar: 300ms opacity crossfade on product/site changes
+- Countdown: shrinking progress bar (amber pending, orange grace)
+- `prefers-reduced-motion` global gate respects accessibility
+
+**Collapsed Tracked-Alert Strip**
+- Horizontal strip at top-right replaces forced-open panel behavior during Auto Track
+- Shows event type, TRACKING label, area name, time remaining, severity color
+- Updates live on target change; click reopens full panel
+- Panel stays collapsed if user collapsed it — AT no longer forces it open
+
+**Auto Track Switch Sound** (`at-switch-sound.js`)
+- Two-tone rising chirp on real tracked-target changes
+- First acquisition always silent — no false sound on startup or restore
+- 8-second cooldown prevents rapid sound during tracker churn
+- Tornado replacing severe thunderstorm bypasses cooldown (priority jump ≥ 30)
+- User toggle (SW button), persisted across reloads
+- Debug section: current/previous target, cooldown, suppressed reason
+
+**Bug Fixes**
+- CC overlay spam: `enableInterrogationLayers` now sequential — site switch completes before layer enable
+- CC/SRV enable gate: synchronous `ccEnableFailed`/`srvEnableFailed` flags prevent async re-entry
+- `enableCC()`/`enableSRV()` now return `false` when `loadOverlay` fails internally
+- SRV invisible on zoom: Auto Track camera capped at zoom 10 (IEM tile limit)
+- Cache busting: meta tags + `?v=` param on all static assets + build version indicator
 
 ### v2.0.0 Metrics
 
@@ -333,3 +376,75 @@ ssh root@10.206.8.121 "cd /opt/cc-radar && rm -rf tiles/ILN/2* && venv/bin/pytho
 | Total lines of code | ~6,400 |
 | LXCs | 2 (119 + 121) |
 | Systemd services | 4 |
+
+---
+
+## 8. Interpretation Layer — Stable Contract (v122+)
+
+Established 2026-03-23. Do not refactor interpretation-source ownership unless a new requirement explicitly changes semantics.
+
+### Invariants
+
+1. **`context-pulse.js`** is the sole owner of in-frame primary ranking. It sets `pulse.primaryInViewEventId` and `pulse.inViewCount` in shared state.
+2. **`getPrimaryContextEvent()`** is the sole strict-context selector. Resolution: pulse active → resolve by ID from canonical store; autotrack enabled → resolve by ID; else → null. No cross-context fallback.
+3. **Type A surfaces** (ETA, confidence, narrative) are strict — render only from selector result. Null = hide immediately.
+4. **Type B banner** is a passive ambient awareness surface. Falls back to `alerts[0]` when selector returns null. Tracks `bannerSourceMode` ("context" | "passive" | "none") internally.
+5. **Derived debug state** (`getDebugState()`) is non-persistent — computed on read only. Exposed in Shift+Alt+D panel under INTERPRETATION section.
+6. **Transition logs** (`context_source_change`, `banner_source_change`) emit only on actual source mode/ID changes, never per-render.
+7. **ClarityLayer never computes in-frame primary.** `_findInFramePrimary()` was removed in v121. Only `context-pulse.js` may rank viewport polygons.
+
+### State Shape
+
+```
+state.pulse: {
+    primaryInViewEventId: null,   // alert ID — set by context-pulse.js only
+    inViewCount: 0                // polygon count during pulse
+}
+```
+
+Cleared in all pulse exit/interruption paths: `_removeCard()`, `returnFromPulse()`, `cancelPulse()`, `stop()`, and when autotrack goes off in `state.js`.
+
+### Surface Classification
+
+| Surface | Type | Source | Empty behavior |
+|---|---|---|---|
+| Banner | B (passive) | selector → `alerts[0]` fallback | "No active threats in your area" |
+| ETA | A (strict) | selector only | Hidden |
+| Confidence | A (strict) | selector only | Hidden |
+| Narrative | A (strict) | selector only | Hidden, no stale text |
+
+### v4.0.0 Changelog (builds 117–122)
+
+**Interpretation Layer** (`clarity-layer.js`)
+- Status banner: structured `[TYPE] — [DISTANCE] — [DIRECTION] — motion` format
+- Motion vector extraction from NWS description text via regex
+- Bearing calculation + 8-point cardinal direction
+- ETA engine: distance-only + motion-based time ETA, 100mi hide threshold
+- Confidence indicator: HIGH/MEDIUM/LOW from priority score, 5s debounce
+- Narrative generator: direction, hazard details, motion, shelter urgency
+- `[IN VIEW]` / `[TRACKING]` prefix on narrative based on context source
+- Unified selector `getPrimaryContextEvent()` — all surfaces consume one call
+- Banner source mode metadata: context/passive/none with transition logging
+- Debug surface in Shift+Alt+D panel: contextMode, contextEventId, bannerMode, bannerEventId
+
+**Pulse/Narrative Integration** (`context-pulse.js`, `state.js`)
+- `pulse.primaryInViewEventId` + `pulse.inViewCount` in shared state
+- Cleared in all 5 exit paths + autotrack-off in state.js
+- Fixed latent bug: `_hidePulseCard` → `_removeCard` (undefined function)
+
+**UI**
+- `#clarity-strip` container: banner + ETA + confidence (top center)
+- `#clarity-narrative` container below alert panel (right side, bottom)
+- Version indicator moved to header inline after title
+- Ticker scroll bar removed (display:none)
+
+**Observability**
+- `context_source_change` log: context, event_id, prev_context, prev_event_id
+- `banner_source_change` log: mode, event_id, prev_mode, prev_event_id
+- Both bounded to actual transitions only
+
+**Performance**
+- Banner throttle: 1/sec
+- ETA interval: 12s
+- Narrative: immediate on source change, 1s drift throttle
+- Confidence debounce: 5s

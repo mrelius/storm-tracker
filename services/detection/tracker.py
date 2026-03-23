@@ -44,6 +44,7 @@ class StormTrack:
     predicted_lat: float = 0.0
     predicted_lon: float = 0.0
     prediction_minutes: float = 0.0
+    nws_alert_id: str = ""
     nws_event: str = ""
     nws_severity: str = ""
 
@@ -117,6 +118,7 @@ class StormTracker:
             track.reflectivity_dbz = c.reflectivity_dbz
             track.velocity_delta = c.velocity_delta
             track.cc_min = c.cc_min
+            track.nws_alert_id = c.nws_alert_id
             track.nws_event = c.nws_event
             track.nws_severity = c.nws_severity
             _compute_motion(track)
@@ -139,6 +141,7 @@ class StormTracker:
                 cc_min=c.cc_min,
                 recent_dbz=[c.reflectivity_dbz] if c.reflectivity_dbz is not None else [],
                 recent_velocity=[c.velocity_delta] if c.velocity_delta is not None else [],
+                nws_alert_id=c.nws_alert_id,
                 nws_event=c.nws_event,
                 nws_severity=c.nws_severity,
             )
