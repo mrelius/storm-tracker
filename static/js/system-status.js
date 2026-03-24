@@ -144,13 +144,24 @@ const SystemStatus = (function () {
         if (!af.enabled) {
             el.textContent = "AF OFF";
             el.className = "ss-badge ss-dim";
-        } else if (af.currentSource) {
-            const src = af.currentSource === "noaa" ? "NOAA" : "SCN";
-            el.textContent = `AF ${src}`;
-            el.className = "ss-badge ss-af-on";
+            el.title = "Audio Follow: disabled";
+        } else if (af.status === "live" && af.currentSource) {
+            const src = af.currentSource === "noaa" ? "NOAA" : af.currentSource === "scanner" ? "SCN" : af.currentSource.toUpperCase();
+            el.textContent = `AF ${src} ●`;
+            el.className = "ss-badge ss-af-live";
+            el.title = `Audio: ${src} streaming (${af.owner || "auto"})`;
+        } else if (af.status === "pending") {
+            el.textContent = "AF ...";
+            el.className = "ss-badge ss-af-pending";
+            el.title = "Audio: connecting/stabilizing";
+        } else if (af.status === "unavailable") {
+            el.textContent = "AF ✕";
+            el.className = "ss-badge ss-af-unavail";
+            el.title = "Audio: stream unavailable";
         } else {
             el.textContent = "AF ---";
             el.className = "ss-badge ss-dim";
+            el.title = "Audio Follow: idle";
         }
     }
 

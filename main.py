@@ -50,6 +50,14 @@ async def lifespan(app: FastAPI):
     register(IEMRadarProvider(site_id="ILN"))  # default: Wilmington OH (Ohio Valley)
     register(NexradCCProvider())
 
+    # TWC regional radar — activate if API key configured
+    from config import TWC_API_KEY, TWC_REGIONAL_LAYER
+    if TWC_API_KEY:
+        from services.radar.twc import TWCRadarProvider, configure as twc_configure
+        twc_configure(TWC_API_KEY, TWC_REGIONAL_LAYER)
+        register(TWCRadarProvider())
+        logger.info("TWC regional radar provider registered")
+
     # Start background tasks
     _ingest_task = asyncio.create_task(run_ingest_loop())
     _alert_task = asyncio.create_task(run_alert_loop())

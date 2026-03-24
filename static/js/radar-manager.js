@@ -43,6 +43,10 @@ const RadarManager = (function () {
         StormState.on("layerChanged", onLayerChanged);
         StormState.on("locationChanged", onLocationChanged);
 
+        // REF hybrid: RainViewer at z≤8, IEM N0Q dual-site blend at z≥9
+        map.on("zoomend", _checkRefSourceSwitch);
+        map.on("moveend", _checkRefSourceSwitch);
+
         populateSiteSelector();
     }
 
@@ -53,11 +57,13 @@ const RadarManager = (function () {
         if (StormState.state.radar.activeLayers.includes("reflectivity")) {
             StormState.deactivateLayer("reflectivity");
             btn.classList.remove("active");
+            showREFLegend(false);
             teardown();
         } else {
             const result = StormState.activateLayer("reflectivity");
             if (result.ok) {
                 btn.classList.add("active");
+                showREFLegend(true);
                 loadAndPreload();
             }
         }
@@ -166,11 +172,13 @@ const RadarManager = (function () {
 
             removeOverlay(productId);
 
+            const overlayNativeMax = frame.max_native_zoom || frame.max_zoom || 10;
             const layer = L.tileLayer(tileUrl, {
                 opacity: frame.opacity || 0.65,
                 zIndex: 15,
-                maxZoom: frame.max_zoom || 10,
-                errorTileUrl: "",  // suppress broken tile images
+                maxZoom: 18,
+                maxNativeZoom: overlayNativeMax,
+                errorTileUrl: "",
                 className: "radar-crossfade",
             });
 
@@ -393,11 +401,14 @@ const RadarManager = (function () {
                 return;
             }
 
+            const isRef = frame.product_id === "reflectivity" || !frame.product_id;
+            const nativeMax = frame.max_native_zoom || frame.max_zoom || 12;
             const layer = L.tileLayer(frame.tile_url_template, {
                 opacity: 0,
                 zIndex: 10,
-                maxZoom: frame.max_zoom || 12,
-                // No crossfade class — animation frames need instant opacity swap
+                maxZoom: 18,
+                maxNativeZoom: nativeMax,
+                className: isRef ? "ref-tile-layer" : "",
             });
 
             layer.addTo(map);
@@ -436,10 +447,11 @@ const RadarManager = (function () {
             frameLayers[currentFrameIdx].setOpacity(0);
         }
 
-        // Show new frame
+        // Show new frame — REF uses attenuated opacity, overlays use metadata
         if (frameLayers[idx]) {
-            const opacity = frameMeta[idx]?.opacity || 1.0;
-            frameLayers[idx].setOpacity(opacity);
+            const meta = frameMeta[idx];
+            const baseOpacity = meta?.opacity || 0.75;
+            frameLayers[idx].setOpacity(baseOpacity);
         }
 
         currentFrameIdx = idx;
@@ -680,6 +692,11 @@ const RadarManager = (function () {
         if (el) el.classList.toggle("hidden", !show);
     }
 
+    function showREFLegend(show) {
+        const el = document.getElementById("ref-legend");
+        if (el) el.classList.toggle("hidden", !show);
+    }
+
     // --- Radar Range Circle ---
 
     let rangeCircle = null;
@@ -818,10 +835,383 @@ const RadarManager = (function () {
 
     function getOverlayLayer(productId) { return overlayLayers[productId] || null; }
 
+    // ── HYBRID REF — Dual-Site Blended Hi-Res ──────────────────
+    // z≤8: RainViewer composite (global, animated)
+    // z≥9: IEM N0Q per-site — primary (1.0) + secondary (0.35)
+    //       Two nearest NEXRAD sites blended for edge coverage
+
+    const REF_HIRES_SWITCH_ZOOM = 9;
+    const REF_SECONDARY_OPACITY = 0.35;
+    const REF_CROSSFADE_MS = 250;
+    const REF_SITE_DEBOUNCE_MS = 400;
+
+    // Regional radar provider state (TWC primary, RainViewer fallback)
+    let regionalState = {
+        provider: "rainviewer",  // "twc" | "rainviewer"
+        active: false,
+        twcLayer: null,          // L.tileLayer for TWC
+        twcMeta: null,           // { tile_url, ts, fts, attribution, ... }
+        twcLastFetch: 0,
+        twcRefreshInterval: 300000, // 5 min
+    };
+
+    let refHiresState = {
+        active: false,
+        primarySite: null,
+        secondarySite: null,
+        zoom: 0,
+    };
+    let refPrimaryLayer = null;
+    let refSecondaryLayer = null;
+    let refSiteDebounceTimer = null;
+    let refLastSiteKey = "";
+
+    function _checkRefSourceSwitch() {
+        if (!map) return;
+        const zoom = map.getZoom();
+        const refActive = StormState.state.radar.activeLayers.includes("reflectivity");
+
+        if (!refActive) {
+            _removeRefHires();
+            _removeTwcRegional();
+            return;
+        }
+
+        if (zoom >= REF_HIRES_SWITCH_ZOOM) {
+            // z≥9: IEM hi-res inspection
+            _removeTwcRegional();
+            if (refSiteDebounceTimer) clearTimeout(refSiteDebounceTimer);
+            refSiteDebounceTimer = setTimeout(() => {
+                _updateRefHires(zoom);
+            }, refHiresState.active ? REF_SITE_DEBOUNCE_MS : 50);
+        } else {
+            // z≤8: regional radar (TWC primary, RainViewer fallback)
+            _removeRefHires();
+            _enableRegionalRadar();
+        }
+    }
+
+    // ── TWC Regional Radar ───────────────────────────────
+    async function _enableRegionalRadar() {
+        // Check if TWC is available
+        const now = Date.now();
+        if (now - regionalState.twcLastFetch < regionalState.twcRefreshInterval && regionalState.twcMeta) {
+            // Use cached TWC metadata
+            if (!regionalState.active || regionalState.provider !== "twc") {
+                _applyTwcLayer(regionalState.twcMeta);
+            }
+            return;
+        }
+
+        try {
+            const resp = await fetch("/api/radar/twc-regional");
+            if (!resp.ok) throw new Error("HTTP " + resp.status);
+            const data = await resp.json();
+            regionalState.twcLastFetch = now;
+
+            if (data.fallback) {
+                // TWC not available — use RainViewer (already active as animation frames)
+                regionalState.provider = "rainviewer";
+                regionalState.active = true;
+                _removeTwcLayer();
+                // Restore RainViewer opacity
+                if (currentFrameIdx >= 0 && frameLayers[currentFrameIdx]) {
+                    frameLayers[currentFrameIdx].setOpacity(frameMeta[currentFrameIdx]?.opacity || 1.0);
+                }
+
+                const log = typeof STLogger !== "undefined" ? STLogger.for("ref_regional") : null;
+                if (log) log.info("regional_radar_fallback", {
+                    from: "twc", to: "rainviewer", reason: data.reason,
+                });
+                return;
+            }
+
+            // TWC available — use it
+            regionalState.twcMeta = data;
+            _applyTwcLayer(data);
+        } catch (e) {
+            // Fetch failed — stick with RainViewer
+            regionalState.provider = "rainviewer";
+            regionalState.active = true;
+        }
+    }
+
+    function _applyTwcLayer(meta) {
+        if (!meta || !meta.tile_url) return;
+
+        // Remove RainViewer animation frames' visibility (TWC replaces them)
+        if (currentFrameIdx >= 0 && frameLayers[currentFrameIdx]) {
+            frameLayers[currentFrameIdx].setOpacity(0);
+        }
+
+        // Remove old TWC layer if exists
+        if (regionalState.twcLayer) {
+            map.removeLayer(regionalState.twcLayer);
+        }
+
+        regionalState.twcLayer = L.tileLayer(meta.tile_url, {
+            opacity: 0,
+            zIndex: 10,
+            maxZoom: 18,
+            maxNativeZoom: meta.max_native_zoom || 6,
+            attribution: meta.attribution || "The Weather Company",
+            errorTileUrl: "",
+        });
+
+        regionalState.twcLayer.addTo(map);
+        setTimeout(() => {
+            if (regionalState.twcLayer) regionalState.twcLayer.setOpacity(1.0);
+        }, 100);
+
+        regionalState.provider = "twc";
+        regionalState.active = true;
+
+        console.log("[REF] TWC regional active:", meta.layer, "ts:", meta.ts);
+    }
+
+    function _removeTwcRegional() {
+        _removeTwcLayer();
+        regionalState.active = false;
+    }
+
+    function _removeTwcLayer() {
+        if (regionalState.twcLayer) {
+            map.removeLayer(regionalState.twcLayer);
+            regionalState.twcLayer = null;
+        }
+        // Restore RainViewer if we were hiding it
+        if (currentFrameIdx >= 0 && frameLayers[currentFrameIdx]) {
+            const meta = frameMeta[currentFrameIdx];
+            frameLayers[currentFrameIdx].setOpacity(meta?.opacity || 1.0);
+        }
+    }
+
+    // Tile occupancy threshold — tiles smaller than this are considered empty/sparse
+    const REF_EMPTY_TILE_BYTES = 400;
+    const REF_SPARSE_TILE_BYTES = 800;
+    const REF_SCAN_STALE_MIN = 5;
+    const REF_SCAN_SUPPRESS_MIN = 10;
+
+    async function _updateRefHires(zoom) {
+        const center = map.getCenter();
+        const bounds = map.getBounds();
+        let sites;
+        try {
+            const resp = await fetch(`/api/radar/nexrad/nearest?lat=${center.lat}&lon=${center.lng}&count=4`);
+            if (!resp.ok) return;
+            const data = await resp.json();
+            sites = data.sites || [];
+        } catch (e) { return; }
+
+        if (sites.length === 0) return;
+
+        // ── Site Scoring ─────────────────────────────────
+        const RADAR_RANGE_KM = 230;
+        const scored = sites.map(s => {
+            const invDist = 1 / Math.max(1, s.distance_km);
+            const inBounds = bounds.contains(L.latLng(s.lat, s.lon)) ? 1.0 : 0.5;
+            const rangeCover = Math.min(1, RADAR_RANGE_KM / Math.max(1, s.distance_km));
+            const coverageScore = inBounds * rangeCover;
+            const finalScore = (0.5 * invDist * 100) + (0.5 * coverageScore);
+            return { ...s, coverageScore, finalScore };
+        });
+        scored.sort((a, b) => b.finalScore - a.finalScore);
+
+        const primarySite = scored[0];
+        const secondarySite = scored.length > 1 ? scored[1] : null;
+        const siteKey = primarySite.site_id + (secondarySite ? "+" + secondarySite.site_id : "");
+
+        if (siteKey === refLastSiteKey && refHiresState.active) {
+            refHiresState.zoom = zoom;
+            return;
+        }
+        refLastSiteKey = siteKey;
+
+        // ── Probe secondary tile for occupancy + timestamp ──
+        let secondaryOpacity = 0;
+        let useSecondary = false;
+        let timestampDeltaMin = null;
+        let occupancyScore = null;
+        let suppressReason = null;
+
+        if (secondarySite) {
+            // Distance-based base opacity
+            const distRatio = secondarySite.distance_km / Math.max(1, primarySite.distance_km);
+            if (distRatio <= 1.5) secondaryOpacity = 0.30;
+            else if (distRatio <= 2.5) secondaryOpacity = 0.20;
+            else secondaryOpacity = 0.12;
+
+            if (secondarySite.distance_km > 300) {
+                secondaryOpacity = 0;
+                suppressReason = "too_far";
+            }
+
+            // Probe: fetch one tile from each site at current zoom to check occupancy + freshness
+            if (secondaryOpacity > 0) {
+                try {
+                    const probeZ = Math.min(zoom, 10);
+                    const n = Math.pow(2, probeZ);
+                    const px = Math.floor((center.lng + 180) / 360 * n);
+                    const py = Math.floor((1 - Math.log(Math.tan(center.lat * Math.PI / 180) + 1 / Math.cos(center.lat * Math.PI / 180)) / Math.PI) / 2 * n);
+
+                    const [priProbe, secProbe] = await Promise.all([
+                        fetch(`/proxy/iem/ridge::${primarySite.site_id}-N0Q-0/${probeZ}/${px}/${py}.png`),
+                        fetch(`/proxy/iem/ridge::${secondarySite.site_id}-N0Q-0/${probeZ}/${px}/${py}.png`),
+                    ]);
+
+                    const priSize = parseInt(priProbe.headers.get("content-length") || "0") || (await priProbe.clone().blob()).size;
+                    const secSize = parseInt(secProbe.headers.get("content-length") || "0") || (await secProbe.clone().blob()).size;
+
+                    // Occupancy: ratio of secondary tile data to primary
+                    occupancyScore = priSize > REF_EMPTY_TILE_BYTES ? secSize / priSize : (secSize > REF_EMPTY_TILE_BYTES ? 0.5 : 0);
+
+                    // Suppress if secondary tile is nearly empty
+                    if (secSize <= REF_EMPTY_TILE_BYTES) {
+                        secondaryOpacity = 0;
+                        suppressReason = "empty_tiles";
+                    } else if (secSize <= REF_SPARSE_TILE_BYTES) {
+                        secondaryOpacity *= 0.5;
+                        suppressReason = "sparse_tiles";
+                    }
+
+                    // Timestamp: use Date headers for scan freshness estimate
+                    const priDate = priProbe.headers.get("date");
+                    const secDate = secProbe.headers.get("date");
+                    if (priDate && secDate) {
+                        const delta = Math.abs(new Date(priDate).getTime() - new Date(secDate).getTime());
+                        timestampDeltaMin = Math.round(delta / 60000);
+                        // Apply scan-time mismatch reduction
+                        if (timestampDeltaMin > REF_SCAN_SUPPRESS_MIN) {
+                            secondaryOpacity = 0;
+                            suppressReason = "stale_scan";
+                        } else if (timestampDeltaMin > REF_SCAN_STALE_MIN) {
+                            secondaryOpacity *= 0.5;
+                            suppressReason = suppressReason || "stale_scan_reduced";
+                        }
+                    }
+                } catch (e) {
+                    // Probe failed — use distance-only opacity
+                }
+            }
+
+            useSecondary = secondaryOpacity > 0.05;
+        }
+
+        // ── Build Layers ─────────────────────────────────
+        const primaryUrl = `/proxy/iem/ridge::${primarySite.site_id}-N0Q-0/{z}/{x}/{y}.png`;
+        const newPrimary = L.tileLayer(primaryUrl, {
+            opacity: 0, zIndex: 12, maxZoom: 18, maxNativeZoom: 10, errorTileUrl: "",
+        });
+
+        let newSecondary = null;
+        if (useSecondary) {
+            const secondaryUrl = `/proxy/iem/ridge::${secondarySite.site_id}-N0Q-0/{z}/{x}/{y}.png`;
+            newSecondary = L.tileLayer(secondaryUrl, {
+                opacity: 0, zIndex: 11, maxZoom: 18, maxNativeZoom: 10, errorTileUrl: "",
+            });
+        }
+
+        // ── Crossfade ────────────────────────────────────
+        newPrimary.addTo(map);
+        if (newSecondary) newSecondary.addTo(map);
+
+        setTimeout(() => {
+            if (newPrimary) newPrimary.setOpacity(1.0);
+            if (newSecondary) newSecondary.setOpacity(secondaryOpacity);
+            setTimeout(() => {
+                if (refPrimaryLayer) map.removeLayer(refPrimaryLayer);
+                if (refSecondaryLayer) map.removeLayer(refSecondaryLayer);
+                refPrimaryLayer = newPrimary;
+                refSecondaryLayer = newSecondary;
+            }, REF_CROSSFADE_MS);
+        }, 50);
+
+        if (currentFrameIdx >= 0 && frameLayers[currentFrameIdx]) {
+            frameLayers[currentFrameIdx].setOpacity(0.2);
+        }
+
+        refHiresState = {
+            active: true,
+            primarySite: primarySite.site_id,
+            secondarySite: useSecondary ? secondarySite.site_id : null,
+            primaryOpacity: 1.0,
+            secondaryOpacity: useSecondary ? Math.round(secondaryOpacity * 100) / 100 : 0,
+            primaryTimestamp: null,
+            secondaryTimestamp: null,
+            timestampDeltaMin: timestampDeltaMin,
+            zoom: zoom,
+        };
+
+        showRadarError(false);
+
+        const log = typeof STLogger !== "undefined" ? STLogger.for("ref_hybrid") : null;
+        if (log) log.info("ref_secondary_decision", {
+            primarySite: primarySite.site_id,
+            secondarySite: secondarySite ? secondarySite.site_id : null,
+            timestampDeltaMin: timestampDeltaMin,
+            occupancyScore: occupancyScore != null ? Math.round(occupancyScore * 100) / 100 : null,
+            finalSecondaryOpacity: useSecondary ? Math.round(secondaryOpacity * 100) / 100 : 0,
+            suppressed: !useSecondary,
+            reason: suppressReason || (useSecondary ? "normal" : "no_secondary"),
+        });
+    }
+
+    function _removeRefHires() {
+        if (!refHiresState.active && !refPrimaryLayer && !refSecondaryLayer) return;
+
+        if (refPrimaryLayer) { map.removeLayer(refPrimaryLayer); refPrimaryLayer = null; }
+        if (refSecondaryLayer) { map.removeLayer(refSecondaryLayer); refSecondaryLayer = null; }
+
+        // Restore RainViewer
+        if (currentFrameIdx >= 0 && frameLayers[currentFrameIdx]) {
+            const meta = frameMeta[currentFrameIdx];
+            frameLayers[currentFrameIdx].setOpacity(meta?.opacity || 1.0);
+        }
+
+        refHiresState = { active: false, primarySite: null, secondarySite: null, zoom: 0 };
+        refLastSiteKey = "";
+    }
+
+    // ── REF Adaptive Filter (smooth interpolation) ─────────────
+    // Continuous interpolation across zoom range — no threshold jumps.
+    // z5 → wide (low contrast, reduced noise)
+    // z12 → tight (high contrast, core emphasis)
+
+    const REF_RANGE = {
+        contrast:   { min: 1.18, max: 1.48 },
+        brightness: { min: 0.83, max: 0.97 },
+        saturate:   { min: 0.95, max: 1.25 },
+    };
+    const REF_ZOOM_MIN = 5;
+    const REF_ZOOM_MAX = 12;
+
+    let lastRefFilterStr = "";
+
+    function _lerp(a, b, t) { return a + (b - a) * t; }
+    function _clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+
+    function _updateRefFilter() {
+        if (!map) return;
+        const zoom = map.getZoom();
+        const t = _clamp01((zoom - REF_ZOOM_MIN) / (REF_ZOOM_MAX - REF_ZOOM_MIN));
+
+        const c = Math.round(_lerp(REF_RANGE.contrast.min, REF_RANGE.contrast.max, t) * 100) / 100;
+        const b = Math.round(_lerp(REF_RANGE.brightness.min, REF_RANGE.brightness.max, t) * 100) / 100;
+        const s = Math.round(_lerp(REF_RANGE.saturate.min, REF_RANGE.saturate.max, t) * 100) / 100;
+
+        const filterVal = `contrast(${c}) brightness(${b}) saturate(${s})`;
+        if (filterVal === lastRefFilterStr) return;
+        lastRefFilterStr = filterVal;
+
+        const app = document.getElementById("app");
+        if (app) app.style.setProperty("--ref-filter", filterVal);
+    }
+
     return {
         init, loadReflectivity: loadAndPreload, toggleReflectivity, retryRadar,
         // Programmatic control for AutoTrack
         setSiteForAutoTrack, enableSRV, enableCC, disableLayers,
         getRadarSite, getManualSiteOverride, getOverlayLayer,
+        getRefHiresState: () => ({ ...refHiresState }),
     };
 })();

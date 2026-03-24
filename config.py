@@ -70,7 +70,23 @@ LAYER_RULES = {
         "requires_advanced": False,
         "display_name": "Correlation Coefficient",
     },
+    "ref_hires": {
+        "opacity": 0.85,
+        "overlay_eligible": False,
+        "requires_advanced": False,
+        "display_name": "Reflectivity (NEXRAD)",
+    },
+    "twc_regional": {
+        "opacity": 1.0,
+        "overlay_eligible": False,
+        "requires_advanced": False,
+        "display_name": "Regional Radar (TWC)",
+    },
 }
+
+# TWC Image Tile Server configuration
+TWC_API_KEY = None  # Set to enable TWC regional radar
+TWC_REGIONAL_LAYER = "radarFcstv2"
 
 # No combos restricted to advanced mode — SRV + CC are designed to work together
 ADVANCED_ONLY_COMBOS = []

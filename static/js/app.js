@@ -8,14 +8,47 @@
     const STALE_WARN_SECONDS = 120;         // amber warning at 2 min
     const STALE_CRIT_SECONDS = 300;         // red warning at 5 min
 
+    // ── Viewport Mode Layer ─────────────────────────────────────
+    const MOBILE_BREAKPOINT = 768;
+    let viewportMode = "desktop";
+
+    function initViewportMode() {
+        const mq = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`);
+        const appEl = document.getElementById("app");
+        const log = typeof STLogger !== "undefined" ? STLogger.for("viewport") : null;
+
+        function applyMode(mobile) {
+            const prev = viewportMode;
+            viewportMode = mobile ? "mobile" : "desktop";
+            if (appEl) {
+                appEl.classList.toggle("is-mobile", mobile);
+                appEl.classList.toggle("is-desktop", !mobile);
+            }
+            if (prev !== viewportMode && log) {
+                log.info("viewport_mode_changed", { mode: viewportMode, width: window.innerWidth });
+            }
+        }
+
+        applyMode(mq.matches);
+        mq.addEventListener("change", (e) => applyMode(e.matches));
+
+        // Orientation change logging
+        if (typeof screen !== "undefined" && screen.orientation) {
+            screen.orientation.addEventListener("change", () => {
+                if (log) log.info("orientation_changed", { type: screen.orientation.type, angle: screen.orientation.angle });
+            });
+        }
+    }
+
     let lastPollTime = null;
     let freshnessTimer = null;
     let isOffline = false;
 
     document.addEventListener("DOMContentLoaded", async () => {
+        initViewportMode();
         STLogger.init();
         const log = STLogger.for("app");
-        log.info("app_init", { build: window.__ST_BUILD__ || "?" });
+        log.info("app_init", { build: window.__ST_BUILD__ || "?", viewportMode });
 
         // 0. Restore persisted session state (before any init)
         const savedSession = SessionPersist.restore();
@@ -49,6 +82,9 @@
         Settings.init();
         LogViewer.init();
         MobileGestures.init();
+        if (typeof MobileEnhancements !== "undefined") MobileEnhancements.init();
+        if (typeof OptionalEnhancements !== "undefined") OptionalEnhancements.init();
+        if (typeof ContextZoom !== "undefined") ContextZoom.init();
         AutoTrackDebug.init();
         SessionPersist.init();
         Validation.init(map);

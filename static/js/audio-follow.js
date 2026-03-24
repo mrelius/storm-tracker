@@ -105,14 +105,49 @@ const AudioFollow = (function () {
     };
     let testLog = null;
 
+    // ── Audio Pipeline Test (local tone — proves browser audio works) ──
+    function playLocalTestTone() {
+        _setDebugStatus("TONE TEST...");
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = "sine";
+            osc.frequency.value = 880;
+            gain.gain.value = 0.25;
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start();
+            _setDebugStatus("TONE PLAYING");
+            setTimeout(() => {
+                osc.stop();
+                ctx.close();
+                _setDebugStatus("TONE OK — audio pipeline works");
+                setTimeout(() => _setDebugStatus(""), 3000);
+            }, 1500);
+        } catch (e) {
+            _setDebugStatus("TONE FAIL: " + e.message);
+        }
+    }
+
+    // ── NOAA Stream Test ──
     function triggerNoaaTest() {
-        if (testState.active) {
-            if (testLog) testLog.info("AUDIO_TEST_IGNORED_ALREADY_RUNNING", { timestamp: Date.now() });
+        if (testState.active) return;
+
+        if (!audioEl) {
+            _setDebugStatus("FAIL: no audio element");
             return;
         }
 
-        if (!testLog && typeof STLogger !== "undefined") {
-            testLog = STLogger.for("audio_test");
+        const af = StormState.state.audioFollow;
+        const stream = STREAMS["noaa"];
+        const url = (stream && stream.urls && stream.urls.length > 0)
+            ? stream.urls[stream.urlIndex % stream.urls.length]
+            : null;
+
+        if (!url) {
+            _setDebugStatus("FAIL: no NOAA URL");
+            return;
         }
 
         const now = Date.now();
@@ -120,30 +155,146 @@ const AudioFollow = (function () {
         testState.startedAt = now;
         testState.endsAt = now + NOAA_TEST_DURATION_MS;
 
-        if (testLog) testLog.info("AUDIO_TEST_START", {
-            timestamp: now,
-            duration_ms: NOAA_TEST_DURATION_MS,
-        });
-
-        // Force NOAA playback, bypass all routing/debounce
-        const af = StormState.state.audioFollow;
         const prevSource = af.currentSource;
         const prevOwner = af.owner;
-
         af.currentSource = "noaa";
         af.owner = "test";
-        af.status = "live";
+        af.status = "pending";
 
-        startPlayback("noaa");
+        _setDebugStatus("CONNECTING: " + url.split("/").pop());
+
+        // Force audible conditions — no pre-play gating
+        audioEl.muted = false;
+        audioEl.volume = 1.0;
+        audioEl.src = url;
+        audioEl.load();
+
+        // Monitor for data arrival
+        let gotData = false;
+        const onCanPlay = () => {
+            gotData = true;
+            af.status = "live";
+            _setDebugStatus("NOAA LIVE — streaming");
+            updateUI();
+            audioEl.removeEventListener("canplay", onCanPlay);
+        };
+        const onError = () => {
+            if (!gotData && af.owner === "test") {
+                const err = audioEl.error;
+                const reason = err ? `code ${err.code}` : "unknown";
+                _setDebugStatus("STREAM ERROR: " + reason);
+                // Try scanner fallback
+                _noaaTestFallback(prevSource, prevOwner);
+            }
+            audioEl.removeEventListener("error", onError);
+        };
+        audioEl.addEventListener("canplay", onCanPlay);
+        audioEl.addEventListener("error", onError);
+
+        testState._diagCleanup = () => {
+            audioEl.removeEventListener("canplay", onCanPlay);
+            audioEl.removeEventListener("error", onError);
+        };
+
+        // Play in user gesture context
+        try {
+            const p = audioEl.play();
+            if (p && p.then) {
+                p.then(() => {
+                    if (af.owner === "test" && af.status === "pending") {
+                        af.status = "live";
+                        _setDebugStatus("NOAA PLAYING");
+                        updateUI();
+                    }
+                }).catch(err => {
+                    if (af.owner === "test") {
+                        if (err.name === "NotAllowedError") {
+                            _setDebugStatus("BLOCKED: browser autoplay policy. Click page first.");
+                            af.status = "blocked";
+                        } else {
+                            _setDebugStatus("PLAY FAIL: " + err.message);
+                            af.status = "unavailable";
+                            _noaaTestFallback(prevSource, prevOwner);
+                        }
+                        updateUI();
+                    }
+                });
+            }
+        } catch (e) {
+            _setDebugStatus("EXCEPTION: " + e.message);
+            af.status = "unavailable";
+        }
+
+        // Timeout: if still pending after 5s, try fallback
+        setTimeout(() => {
+            if (testState.active && af.owner === "test" && af.status === "pending") {
+                _setDebugStatus("TIMEOUT: no data after 5s");
+                _noaaTestFallback(prevSource, prevOwner);
+            }
+        }, 5000);
+
         _updateTestUI(true);
-
-        // Countdown tick
         testState.tickTimer = setInterval(_updateTestCountdown, 500);
-
-        // Self-terminating timer
         testState.timer = setTimeout(function () {
             _endNoaaTest(prevSource, prevOwner);
         }, NOAA_TEST_DURATION_MS);
+    }
+
+    // Hard fallback: try scanner, then tone
+    function _noaaTestFallback(prevSource, prevOwner) {
+        const af = StormState.state.audioFollow;
+        if (af.owner !== "test") return;
+
+        // Try scanner
+        const scanner = STREAMS["scanner"];
+        if (scanner && scanner.urls && scanner.urls.length > 0) {
+            const url = scanner.urls[0];
+            _setDebugStatus("FALLBACK: trying scanner...");
+            audioEl.src = url;
+            audioEl.load();
+            audioEl.muted = false;
+            audioEl.volume = 1.0;
+            const p = audioEl.play();
+            if (p && p.then) {
+                p.then(() => {
+                    af.currentSource = "scanner";
+                    af.status = "live";
+                    _setDebugStatus("SCANNER LIVE (NOAA failed)");
+                    updateUI();
+                }).catch(() => {
+                    // All streams failed — play tone as proof audio works
+                    _setDebugStatus("ALL STREAMS FAILED — playing test tone");
+                    playLocalTestTone();
+                });
+            }
+            return;
+        }
+
+        // No scanner — tone
+        _setDebugStatus("NO FALLBACK STREAMS — playing test tone");
+        playLocalTestTone();
+    }
+
+    // UI-visible debug status — PERSISTENT until next test
+    let lastTestResult = "";
+
+    function _setDebugStatus(msg) {
+        const el = document.getElementById("audio-debug-status");
+        if (el) {
+            el.textContent = msg;
+            el.style.display = msg ? "block" : "none";
+        }
+        if (msg) {
+            lastTestResult = msg;
+            console.log("[AUDIO_DEBUG]", msg);
+        }
+
+        // Also update persistent result display
+        const persistEl = document.getElementById("audio-last-result");
+        if (persistEl && msg) {
+            persistEl.textContent = "LAST TEST: " + msg;
+            persistEl.style.display = "block";
+        }
     }
 
     function _endNoaaTest(prevSource, prevOwner) {
@@ -151,6 +302,14 @@ const AudioFollow = (function () {
 
         if (testState.tickTimer) { clearInterval(testState.tickTimer); testState.tickTimer = null; }
         if (testState.timer) { clearTimeout(testState.timer); testState.timer = null; }
+        if (testState._diagCleanup) { testState._diagCleanup(); testState._diagCleanup = null; }
+
+        console.log("[NOAA_TEST] ending", {
+            paused: audioEl ? audioEl.paused : "N/A",
+            currentTime: audioEl ? audioEl.currentTime : "N/A",
+            readyState: audioEl ? audioEl.readyState : "N/A",
+            status: StormState.state.audioFollow.status,
+        });
 
         const af = StormState.state.audioFollow;
         const streamWasPlaying = audioEl && !audioEl.paused && audioEl.src;
@@ -245,6 +404,10 @@ const AudioFollow = (function () {
         const testBtn = document.getElementById("btn-noaa-test");
         if (testBtn) testBtn.addEventListener("click", triggerNoaaTest);
 
+        // Tone test button (proves audio pipeline works)
+        const toneBtn = document.getElementById("btn-tone-test");
+        if (toneBtn) toneBtn.addEventListener("click", playLocalTestTone);
+
         // Keyboard shortcut: Shift+T for NOAA test
         document.addEventListener("keydown", (e) => {
             if (e.shiftKey && e.key === "T" && !e.ctrlKey && !e.altKey && !e.metaKey) {
@@ -253,7 +416,199 @@ const AudioFollow = (function () {
             }
         });
 
+        // Start playback watchdog
+        _startWatchdog();
+
         updateUI();
+    }
+
+    // ── Playback Watchdog + Self-Healing ─────────────────────────────
+
+    const WATCHDOG_INTERVAL_MS = 3000;
+    const STALL_THRESHOLD_MS = 8000;
+    const MAX_RECOVERY_ATTEMPTS = 3;
+    const RECOVERY_BACKOFF = [0, 2000, 5000]; // ms delay per attempt
+
+    let watchdogTimer = null;
+    let recoveryAttempts = 0;
+    let lastProgressAt = 0;
+    let recoveryInProgress = false;
+
+    function _startWatchdog() {
+        if (watchdogTimer) return;
+        watchdogTimer = setInterval(_watchdogCheck, WATCHDOG_INTERVAL_MS);
+
+        // Track progress via timeupdate event
+        if (audioEl) {
+            audioEl.addEventListener("timeupdate", () => { lastProgressAt = Date.now(); });
+            audioEl.addEventListener("progress", () => { lastProgressAt = Date.now(); });
+        }
+    }
+
+    function _watchdogCheck() {
+        if (!audioEl) return;
+        if (recoveryInProgress) return;
+        if (testState.active) return;
+
+        const af = StormState.state.audioFollow;
+
+        // Only watch when we expect playback
+        if (!af.enabled || af.status !== "live" || !af.currentSource) return;
+        if (audioEl.paused) return;
+
+        // Check for buffer stall: element says playing but no data flowing
+        const now = Date.now();
+        if (audioEl.readyState < 3 && lastProgressAt > 0 && (now - lastProgressAt > STALL_THRESHOLD_MS)) {
+            _triggerRecovery("buffer_stall");
+            return;
+        }
+
+        // Check for network stall: stuck in loading state
+        if (audioEl.networkState === 2 && lastProgressAt > 0 && (now - lastProgressAt > STALL_THRESHOLD_MS)) {
+            _triggerRecovery("network_stall");
+            return;
+        }
+
+        // Healthy — reset recovery counter
+        if (audioEl.readyState >= 3 && !audioEl.paused) {
+            recoveryAttempts = 0;
+        }
+    }
+
+    // Failover chain: try next source after exhausting recovery on current
+    const FAILOVER_CHAIN = ["noaa", "scanner"];
+    const FADE_DURATION_MS = 400;
+
+    function _triggerRecovery(reason) {
+        if (recoveryAttempts >= MAX_RECOVERY_ATTEMPTS) {
+            // Exhausted on current source — try failover
+            _attemptFailover(reason);
+            return;
+        }
+
+        recoveryInProgress = true;
+        const attempt = recoveryAttempts + 1;
+        const delay = RECOVERY_BACKOFF[Math.min(recoveryAttempts, RECOVERY_BACKOFF.length - 1)];
+
+        const recoveryLog = typeof STLogger !== "undefined" ? STLogger.for("audio_recovery") : null;
+        if (recoveryLog) recoveryLog.info("audio_recovery_attempt", {
+            reason: reason,
+            attempt: attempt,
+            source: StormState.state.audioFollow.currentSource || "none",
+            delay_ms: delay,
+        });
+
+        setTimeout(() => {
+            _softRecover();
+        }, delay);
+
+        recoveryAttempts++;
+    }
+
+    function _softRecover() {
+        if (!audioEl) { recoveryInProgress = false; return; }
+        const af = StormState.state.audioFollow;
+        const sourceType = af.currentSource;
+
+        if (!sourceType || !af.enabled) {
+            recoveryInProgress = false;
+            return;
+        }
+
+        // Soft recovery: fade out → reload → fade in
+        const startVol = audioEl.volume;
+        const fadeStart = Date.now();
+
+        function fadeOut() {
+            const elapsed = Date.now() - fadeStart;
+            const t = Math.min(1, elapsed / FADE_DURATION_MS);
+            audioEl.volume = Math.max(0, startVol * (1 - t));
+            if (t < 1) { requestAnimationFrame(fadeOut); return; }
+
+            // Volume at 0 — reload
+            try {
+                audioEl.pause();
+                const stream = STREAMS[sourceType];
+                if (stream && stream.urls && stream.urls.length > 0) {
+                    const url = stream.urls[stream.urlIndex % stream.urls.length];
+                    audioEl.src = url;
+                    audioEl.load();
+                    const p = audioEl.play();
+                    if (p && p.then) {
+                        p.then(() => {
+                            // Fade back in
+                            _fadeIn(currentVolume);
+                            _logPlaybackState("recovery_succeeded");
+                            recoveryAttempts = 0;
+                            recoveryInProgress = false;
+                            lastProgressAt = Date.now();
+                        }).catch(() => {
+                            audioEl.volume = currentVolume;
+                            _logPlaybackState("recovery_failed");
+                            recoveryAttempts++;
+                            recoveryInProgress = false;
+                        });
+                    } else {
+                        audioEl.volume = currentVolume;
+                        recoveryInProgress = false;
+                    }
+                } else {
+                    audioEl.volume = currentVolume;
+                    recoveryInProgress = false;
+                }
+            } catch (e) {
+                audioEl.volume = currentVolume;
+                recoveryInProgress = false;
+                recoveryAttempts++;
+            }
+        }
+        requestAnimationFrame(fadeOut);
+    }
+
+    function _fadeIn(targetVol) {
+        if (!audioEl) return;
+        const fadeStart = Date.now();
+        function step() {
+            const elapsed = Date.now() - fadeStart;
+            const t = Math.min(1, elapsed / FADE_DURATION_MS);
+            audioEl.volume = targetVol * t;
+            if (t < 1) requestAnimationFrame(step);
+        }
+        requestAnimationFrame(step);
+    }
+
+    function _attemptFailover(reason) {
+        const af = StormState.state.audioFollow;
+        const currentSource = af.currentSource;
+        const currentIdx = FAILOVER_CHAIN.indexOf(currentSource);
+        const recoveryLog = typeof STLogger !== "undefined" ? STLogger.for("audio_recovery") : null;
+
+        // Try next in chain
+        for (let i = currentIdx + 1; i < FAILOVER_CHAIN.length; i++) {
+            const nextSource = FAILOVER_CHAIN[i];
+            const stream = STREAMS[nextSource];
+            if (stream && stream.urls && stream.urls.length > 0) {
+                if (recoveryLog) recoveryLog.info("audio_failover", {
+                    from: currentSource,
+                    to: nextSource,
+                    reason: reason,
+                });
+
+                af.currentSource = nextSource;
+                recoveryAttempts = 0;
+                recoveryInProgress = false;
+                startPlayback(nextSource);
+                updateUI();
+                return;
+            }
+        }
+
+        // No failover available — truly exhausted
+        af.status = "unavailable";
+        _logPlaybackState("recovery_exhausted");
+        updateUI();
+        recoveryAttempts = 0;
+        recoveryInProgress = false;
     }
 
     // ── Toggle ──────────────────────────────────────────────────────────
@@ -789,11 +1144,15 @@ const AudioFollow = (function () {
             audioEl.src = url;
             audioEl.load();
             const playPromise = audioEl.play();
-            if (playPromise && playPromise.catch) {
-                playPromise.catch(e => {
-                    console.warn("[AudioFollow] Play failed:", e.message);
+            if (playPromise && playPromise.then) {
+                playPromise.then(() => {
+                    _logPlaybackState("play_succeeded");
+                }).catch(e => {
+                    const isAutoplayBlock = e.name === "NotAllowedError";
+                    console.warn("[AudioFollow] Play failed:", e.message, isAutoplayBlock ? "(autoplay blocked)" : "");
                     const af = StormState.state.audioFollow;
-                    af.status = "unavailable";
+                    af.status = isAutoplayBlock ? "blocked" : "unavailable";
+                    _logPlaybackState(isAutoplayBlock ? "autoplay_blocked" : "play_failed");
                     updateUI();
                     emitDebug();
                 });
@@ -834,14 +1193,40 @@ const AudioFollow = (function () {
     // Audio element event handlers
     function onAudioPlaying() {
         const af = StormState.state.audioFollow;
-        if (af.owner === "auto-follow") {
+        if (af.owner === "auto-follow" || af.owner === "test") {
             af.status = "live";
             updateUI();
             emitDebug();
         }
+
+        // Functional playback verification log
+        _logPlaybackState("playing_confirmed");
+    }
+
+    function _logPlaybackState(trigger) {
+        if (!audioEl) return;
+        const af = StormState.state.audioFollow;
+        const logFn = typeof STLogger !== "undefined" ? STLogger.for("audio_verify") : null;
+        if (!logFn) return;
+
+        logFn.info("audio_playback_state", {
+            trigger: trigger,
+            source: af.currentSource || "none",
+            playing: !audioEl.paused,
+            muted: audioEl.muted,
+            volume: Math.round(audioEl.volume * 100) / 100,
+            src: audioEl.src ? audioEl.src.slice(0, 60) : "none",
+            readyState: audioEl.readyState,
+            networkState: audioEl.networkState,
+            blocked: audioEl.paused && audioEl.readyState >= 2, // has data but paused = likely blocked
+            owner: af.owner,
+            status: af.status,
+        });
     }
 
     function onAudioError() {
+        _logPlaybackState("error");
+
         // Handle stream failure during test mode
         if (testState.active) {
             if (testLog) testLog.info("AUDIO_TEST_STREAM_FAIL", { timestamp: Date.now() });
@@ -884,12 +1269,12 @@ const AudioFollow = (function () {
     }
 
     function onAudioPause() {
+        _logPlaybackState("paused");
+
         // If user manually paused (not our stop), set manual ownership
         const af = StormState.state.audioFollow;
         if (af.owner === "auto-follow" && af.status === "live") {
-            // Check if we caused the pause (our stopPlayback removes src)
             if (audioEl.src) {
-                // User manually paused — transfer ownership
                 af.owner = "manual";
                 af.manualOverride = true;
                 setDecision(af.targetEvent, null, null, af.currentSource, "manual_pause_override");
@@ -1130,6 +1515,7 @@ const AudioFollow = (function () {
         notifyManualStop,
         toggleEnabled,
         triggerNoaaTest,
+        playLocalTestTone,
         isTestActive,
     };
 })();

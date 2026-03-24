@@ -5,6 +5,8 @@
 const StormState = (function () {
     const LAYER_RULES = {
         reflectivity: { opacity: 1.0, overlayEligible: false, requiresAdvanced: false },
+        ref_hires:    { opacity: 0.85, overlayEligible: false, requiresAdvanced: false },
+        twc_regional: { opacity: 1.0,  overlayEligible: false, requiresAdvanced: false },
         srv:          { opacity: 0.65, overlayEligible: true,  requiresAdvanced: false },
         cc:           { opacity: 0.55, overlayEligible: true,  requiresAdvanced: false },
     };
@@ -74,6 +76,14 @@ const StormState = (function () {
             warningsOnly: false,
             data: [],
             panelOpen: false,
+        },
+        mobile: {
+            panelSnap: "closed",        // "closed" | "peek" | "expanded"
+            cardMode: "full",           // "full" | "compact" | "minimal" — derived from panelSnap
+            attentionLevel: "calm",     // "calm" | "elevated" | "critical" — derived from top alert severity
+            energyMode: "normal",       // "normal" | "reduced" — toggled by idle/low-battery
+            cardReorderLocked: false,   // true during reorder lock window
+            audioIndicator: null,       // "noaa" | "scanner" | "spotter" | null — mirrors active audio source
         },
         autotrack: {
             mode: "off",               // legacy: "off" | "track" | "interrogate" (kept for compat)
@@ -207,6 +217,14 @@ const StormState = (function () {
         emit("panelToggled", state.alerts.panelOpen);
     }
 
+    function setMobilePanelSnap(snap) {
+        if (!["closed", "peek", "expanded"].includes(snap)) return;
+        state.mobile.panelSnap = snap;
+        // Derive card mode from panel snap
+        state.mobile.cardMode = snap === "closed" ? "full" : snap === "peek" ? "compact" : "minimal";
+        emit("mobilePanelSnapped", { snap, cardMode: state.mobile.cardMode });
+    }
+
     function getEventColor(event) {
         return EVENT_COLORS[event] || DEFAULT_EVENT_COLOR;
     }
@@ -257,7 +275,7 @@ const StormState = (function () {
         setMode, setLocation,
         canActivateLayer, activateLayer, deactivateLayer,
         setAlertSort, setAlertCategory, setAlerts,
-        togglePanel, getEventColor,
+        togglePanel, setMobilePanelSnap, getEventColor,
         cycleAutoTrack, setAutoTrackMode,
         LAYER_RULES, MAX_ACTIVE_LAYERS, AUTOTRACK_MODES,
     };

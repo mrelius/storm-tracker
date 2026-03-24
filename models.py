@@ -71,7 +71,8 @@ class RadarLayerInfo(BaseModel):
     overlay_eligible: bool = False
     requires_advanced: bool = False
     min_zoom: int = 3
-    max_zoom: int = 12
+    max_zoom: int = 18
+    max_native_zoom: int = 12
 
 
 class RadarFrameSet(BaseModel):

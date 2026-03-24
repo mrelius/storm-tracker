@@ -1418,6 +1418,49 @@ html, body {
 .cc-mid { background: #d28c50; }
 .cc-high { background: #1e90ff; }
 
+/* REF Legend */
+.ref-legend {
+    position: absolute;
+    bottom: 80px;
+    right: 400px;
+    z-index: 999;
+    background: rgba(10, 14, 23, 0.9);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    width: 140px;
+    transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.panel-is-closed .ref-legend { right: 16px; }
+
+.ref-legend-title {
+    font-size: 9px;
+    color: var(--text-muted);
+    text-align: center;
+    margin-bottom: 2px;
+    letter-spacing: 0.5px;
+}
+
+.ref-legend-bands { margin-top: 2px; }
+
+.ref-band {
+    font-size: 8px;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    line-height: 1.5;
+}
+
+.ref-swatch {
+    display: inline-block;
+    width: 10px;
+    height: 8px;
+    border-radius: 1px;
+    flex-shrink: 0;
+}
+
 /* Radar Error/Retry */
 .radar-error {
     background: rgba(239, 68, 68, 0.15);
@@ -3114,6 +3157,9 @@ html, body {
 
 .ss-at-on { color: #22c55e; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.2); }
 .ss-af-on { color: #3b82f6; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.2); }
+.ss-af-live { color: #22c55e; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.2); }
+.ss-af-pending { color: #f59e0b; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.15); }
+.ss-af-unavail { color: #ef4444; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.15); }
 
 .ss-age {
     color: #475569;
@@ -4402,6 +4448,24 @@ html, body {
 /* ── 4. Radar Product Transitions — Crossfade ─────────────────── */
 
 /* Applied to overlay tile layers via JS className injection */
+/* ── REF Tile Rendering — Adaptive Intensity Curve ───────────── */
+/* mix-blend-mode: screen makes dark (low-dBZ) pixels transparent
+   against the dark map, while bright (high-dBZ) pixels remain vivid.
+   --ref-filter is set dynamically by RadarManager based on zoom level:
+     wide (z<7):  contrast(1.20) brightness(0.85) — reduce noise
+     normal (7-10): contrast(1.35) brightness(0.90) — balanced
+     tight (z>10):  contrast(1.45) brightness(0.95) — emphasize cores */
+/* REF tiles: raw provider output. No blur, no heavy filters.
+   RainViewer (z≤8) and IEM N0Q (z≥9) both render unmodified. */
+.ref-tile-layer {
+    /* No filter, no blend mode — real data only */
+}
+
+/* Ensure REF never obscures alert polygon boundaries */
+.leaflet-overlay-pane {
+    z-index: 400 !important;
+}
+
 .radar-crossfade {
     transition: opacity 0.3s ease !important;
 }
@@ -4440,6 +4504,42 @@ html, body {
 
 .panel-is-closed .audio-test-indicator {
     right: 0;
+}
+
+.audio-last-result {
+    position: absolute;
+    top: 100px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1100;
+    font-family: 'Consolas', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    color: #94a3b8;
+    background: rgba(10, 14, 23, 0.9);
+    border: 1px solid var(--border);
+    padding: 4px 12px;
+    border-radius: 3px;
+    max-width: 90vw;
+    text-align: center;
+}
+
+.audio-debug-status {
+    position: absolute;
+    top: 80px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1200;
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
+    font-weight: 700;
+    color: #f59e0b;
+    background: rgba(10, 14, 23, 0.95);
+    border: 1px solid #f59e0b;
+    padding: 6px 14px;
+    border-radius: 4px;
+    max-width: 90vw;
+    text-align: center;
 }
 
 #btn-noaa-test {
@@ -4537,7 +4637,7 @@ html, body {
     transition: opacity 0.3s ease, right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.srv-legend.hidden, .cc-legend.hidden {
+.srv-legend.hidden, .cc-legend.hidden, .ref-legend.hidden {
     opacity: 0;
     pointer-events: none;
 }
@@ -4551,5 +4651,413 @@ html, body {
     .at-debug-panel {
         right: 16px;
         width: 280px;
+    }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   MOBILE-NATIVE LAYOUT SYSTEM — v143
+   All rules @media-scoped. Desktop NEVER modified.
+
+   Layout zones (top to bottom):
+     Z1: Header bar (36px)
+     Z2: Info strip (clarity/rail, variable)
+     Z3: Map (flexible, fills remaining)
+     Z4: Bottom card stack (above dock, max 35vh)
+     Z5: Dock (58px + safe area)
+
+   Priority tiers (z-index):
+     T1: Dock = 1100
+     T2: Panel expanded = 1080
+     T3: Panel peek = 1070
+     T4: Cards = 1050
+     T5: Controls/legends = 999
+     T6: Map base = 1
+
+   Panel snap states: closed / peek / expanded
+   Card modes: full (closed) / compact (peek) / minimal (expanded)
+   ══════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 768px) {
+    /* ── Layout Tokens ────────────────────────────────────────── */
+    :root {
+        --m-header: 36px;
+        --m-dock: var(--dock-height, 58px);
+        --m-safe-bottom: env(safe-area-inset-bottom, 0px);
+        --m-safe-top: env(safe-area-inset-top, 0px);
+        --m-bottom: calc(var(--m-dock) + var(--m-safe-bottom));
+        --m-peek-height: 35vh;
+        --m-card-zone: calc(35vh);
+    }
+
+    /* ── Z1: Header ───────────────────────────────────────────── */
+    /* Already handled by existing mobile rules */
+
+    /* ── Z2: Info Strip ───────────────────────────────────────── */
+    .clarity-strip {
+        top: var(--m-header);
+        font-size: 9px;
+        padding: 2px 8px;
+        gap: 4px;
+        max-width: 92vw;
+    }
+
+    .is-mobile.rail-visible .clarity-strip {
+        top: calc(var(--m-header) + 26px);
+    }
+
+    .at-collapsed-rail {
+        top: var(--m-header);
+        height: 26px;
+        z-index: 998;
+    }
+
+    .pulse-context-label {
+        top: calc(var(--m-header) + 24px);
+        font-size: 8px;
+    }
+
+    .is-mobile.rail-visible .pulse-context-label {
+        top: calc(var(--m-header) + 50px);
+    }
+
+    /* ── Z4: Bottom Card Stack ────────────────────────────────── */
+    .pulse-card-stack {
+        position: fixed;
+        top: auto;
+        bottom: var(--m-bottom);
+        left: 8px;
+        right: 8px;
+        transform: none;
+        width: auto;
+        max-width: none;
+        max-height: var(--m-card-zone);
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        z-index: 1050;
+        pointer-events: auto;
+        transition: transform 0.2s ease, opacity 0.2s ease;
+    }
+
+    .pulse-card-stack.pcs-visible {
+        right: 8px;
+    }
+
+    /* Card modes tied to panel snap */
+    .m-panel-peek .pulse-card-stack {
+        max-height: 20vh;
+    }
+
+    .m-panel-peek .pcs-primary .pcs-headline,
+    .m-panel-peek .pcs-primary .pcs-hazard,
+    .m-panel-peek .pcs-primary .pcs-bar {
+        display: none;
+    }
+
+    .m-panel-expanded .pulse-card-stack {
+        transform: translateY(100%);
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    /* Card sizing */
+    .pcs-card {
+        overflow: hidden;
+    }
+
+    .pcs-primary {
+        padding: 6px 8px;
+    }
+
+    .pcs-headline {
+        font-size: 9px;
+        max-height: 2.4em;
+        overflow: hidden;
+    }
+
+    .pcs-hazard {
+        font-size: 8px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    /* ── Z3: Panel Snap States ────────────────────────────────── */
+    #alert-panel {
+        position: fixed;
+        left: 0;
+        right: 0;
+        width: 100%;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        transition: top 0.25s ease, bottom 0.25s ease, transform 0.25s ease;
+    }
+
+    #alert-panel.m-snap-closed {
+        transform: translateY(100%);
+        top: auto;
+        bottom: 0;
+        height: 0;
+        z-index: 1060;
+    }
+
+    #alert-panel.m-snap-peek {
+        transform: none;
+        top: auto;
+        bottom: var(--m-bottom);
+        height: var(--m-peek-height);
+        z-index: 1070;
+        border-top: 1px solid var(--border);
+        border-radius: 12px 12px 0 0;
+    }
+
+    #alert-panel.m-snap-expanded {
+        transform: none;
+        top: var(--m-header);
+        bottom: var(--m-bottom);
+        height: auto;
+        z-index: 1080;
+    }
+
+    /* Peek handle */
+    #alert-panel.m-snap-peek::before,
+    #alert-panel.m-snap-expanded::before {
+        content: "";
+        display: block;
+        width: 32px;
+        height: 4px;
+        margin: 6px auto 4px;
+        background: rgba(100, 116, 139, 0.4);
+        border-radius: 2px;
+    }
+
+    /* ── Z5: Controls — thumb zone ────────────────────────────── */
+    .leaflet-control-zoom {
+        bottom: calc(var(--m-bottom) + 8px) !important;
+        top: auto !important;
+        left: 8px !important;
+        right: auto !important;
+    }
+
+    .leaflet-control-attribution {
+        bottom: var(--m-bottom) !important;
+        font-size: 8px !important;
+    }
+
+    .system-status-strip {
+        bottom: calc(var(--m-bottom) + 4px);
+        left: auto;
+        right: 50px;
+        font-size: 6px;
+    }
+
+    .srv-legend,
+    .cc-legend {
+        bottom: calc(var(--m-bottom) + 50px);
+        left: 8px;
+        right: auto;
+        font-size: 8px;
+    }
+
+    .spc-risk-card,
+    .guidance-card,
+    .prediction-card {
+        top: auto;
+        bottom: calc(var(--m-bottom) + 8px);
+        left: 8px;
+        right: auto;
+        max-width: 160px;
+        font-size: 9px;
+        z-index: 999;
+    }
+
+    .audio-test-indicator {
+        top: var(--m-header);
+        right: 0;
+        font-size: 10px;
+        z-index: 1100;
+    }
+
+    .clarity-narrative {
+        display: none; /* narrative shown in cards on mobile */
+    }
+
+    .build-version {
+        display: none;
+    }
+
+    /* ── Total height guard: ensure map visible ───────────────── */
+    /* Panel peek + cards must not exceed 85vh combined */
+    .m-panel-peek .pulse-card-stack {
+        max-height: min(20vh, calc(85vh - var(--m-header) - var(--m-bottom) - var(--m-peek-height)));
+    }
+
+    /* ── Empty panel compact ──────────────────────────────────── */
+    .panel-empty-state {
+        padding: 12px 8px;
+        font-size: 10px;
+    }
+
+    /* ── Card Depth Signaling ─────────────────────────────────── */
+    .pcs-card:nth-child(1) { transform: scale(1); opacity: 1; }
+    .pcs-card:nth-child(2) { transform: scale(0.97); opacity: 0.8; margin-top: -2px; }
+    .pcs-card:nth-child(3) { transform: scale(0.94); opacity: 0.6; margin-top: -2px; }
+
+    /* ── Card Mode Transitions (content fade) ─────────────────── */
+    .pcs-headline,
+    .pcs-hazard,
+    .pcs-bar,
+    .pcs-dist {
+        transition: opacity 0.18s ease, max-height 0.18s ease;
+        overflow: hidden;
+    }
+
+    .m-panel-peek .pcs-primary .pcs-headline,
+    .m-panel-peek .pcs-primary .pcs-hazard,
+    .m-panel-peek .pcs-primary .pcs-bar {
+        opacity: 0;
+        max-height: 0;
+        margin: 0;
+        padding: 0;
+    }
+
+    /* ── Panel Snap Transitions ───────────────────────────────── */
+    #alert-panel {
+        transition: height 0.22s ease, top 0.22s ease, bottom 0.22s ease, transform 0.22s ease;
+    }
+
+    .pulse-card-stack {
+        transition: transform 0.2s ease, opacity 0.18s ease, max-height 0.2s ease;
+    }
+
+    /* ── Idle State — reduce UI prominence ────────────────────── */
+    .m-idle .pulse-card-stack {
+        opacity: 0.5;
+    }
+
+    .m-idle .clarity-strip {
+        opacity: 0.4;
+    }
+
+    .m-idle .system-status-strip {
+        opacity: 0.3;
+    }
+
+    /* ── No-Alerts — hide empty card stack ────────────────────── */
+    .m-no-alerts .pulse-card-stack {
+        display: none;
+    }
+
+    /* ── Render Cap Guard — hide overflow cards via CSS ────────── */
+    .pcs-card:nth-child(n+4) {
+        display: none;
+    }
+
+    /* ══════════════════════════════════════════════════════════════
+       ENHANCEMENT LAYER v2 — priority system, decay, stickiness
+       ══════════════════════════════════════════════════════════════ */
+
+    /* ── Visual Priority Classes (resolved by JS) ─────────────── */
+    /* m-vis-calm: default, no override */
+    /* m-vis-idle: muted */
+    /* m-vis-audio: subtle audio hint */
+    /* m-vis-tracking: AT emphasis */
+    /* m-vis-elevated: amber warning tones */
+    /* m-vis-critical: red focus, secondary muted */
+
+    /* ── Attention: Elevated ──────────────────────────────────── */
+    .m-attention-elevated .pcs-primary {
+        border-left-width: 4px;
+        box-shadow: 0 0 10px rgba(255, 215, 0, 0.12);
+    }
+
+    .m-attention-elevated .clarity-strip {
+        border-color: rgba(255, 215, 0, 0.2);
+    }
+
+    /* ── Attention: Critical (focused — secondary muted) ──────── */
+    .m-attention-critical .pcs-primary {
+        border-left-width: 5px;
+        box-shadow: 0 0 12px rgba(239, 68, 68, 0.18);
+    }
+
+    /* Critical toning: mute everything except primary card */
+    .m-critical-focus .pcs-secondary,
+    .m-critical-focus .pcs-tertiary {
+        opacity: 0.35;
+        box-shadow: none;
+        border-left-width: 2px;
+    }
+
+    .m-critical-focus .clarity-strip {
+        border-color: rgba(239, 68, 68, 0.25);
+        background: rgba(239, 68, 68, 0.04);
+    }
+
+    .m-critical-focus #mobile-dock {
+        border-top-color: rgba(239, 68, 68, 0.2);
+    }
+
+    /* Mute secondary UI surfaces during critical */
+    .m-critical-focus .system-status-strip { opacity: 0.3; }
+    .m-critical-focus .srv-legend,
+    .m-critical-focus .cc-legend { opacity: 0.3; }
+
+    /* ── AT Visual Alignment ──────────────────────────────────── */
+    .m-tracked-emphasis {
+        border-left-color: var(--accent) !important;
+        box-shadow: 0 0 8px rgba(74, 144, 217, 0.15);
+    }
+
+    .m-non-tracked {
+        opacity: 0.5;
+    }
+
+    .m-at-active .pcs-tracked .pcs-tag {
+        color: var(--accent);
+        font-weight: 800;
+    }
+
+    /* ── Audio Indicator ──────────────────────────────────────── */
+    .dock-btn.dock-audio { position: relative; }
+
+    .m-audio-live .dock-btn.dock-audio::after {
+        content: "";
+        position: absolute;
+        bottom: 2px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #22c55e;
+    }
+
+    .m-audio-noaa .dock-btn.dock-audio { border-color: rgba(34, 197, 94, 0.3); }
+    .m-audio-scanner .dock-btn.dock-audio { border-color: rgba(245, 158, 11, 0.3); }
+
+    /* ── Reorder Lock ─────────────────────────────────────────── */
+    .m-reorder-locked .pcs-card { transition: none !important; }
+
+    /* ── Energy: Reduced ──────────────────────────────────────── */
+    .m-energy-reduced .pcs-card,
+    .m-energy-reduced .pulse-card-stack,
+    .m-energy-reduced #alert-panel {
+        transition-duration: 0.01ms !important;
+    }
+
+    .m-energy-reduced .pcs-card:nth-child(2),
+    .m-energy-reduced .pcs-card:nth-child(3) {
+        transform: none;
+    }
+
+    .m-energy-reduced .m-idle .pulse-card-stack { opacity: 0.35; }
+
+    /* ── Predictive Attention (pre-alert hint) ────────────────── */
+    .m-pre-alert .clarity-strip {
+        border-color: rgba(245, 158, 11, 0.15);
+    }
+
+    .m-pre-alert #mobile-dock {
+        border-top-color: rgba(245, 158, 11, 0.1);
     }
 }

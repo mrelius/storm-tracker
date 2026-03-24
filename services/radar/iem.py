@@ -25,7 +25,8 @@ IEM_TILE_BASE = "https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0"
 
 # IEM product codes mapped to our product IDs
 IEM_PRODUCTS = {
-    "srv": "N0S",   # Storm Relative Velocity
+    "srv": "N0S",       # Storm Relative Velocity
+    "ref_hires": "N0Q", # Base Reflectivity (per-site, high-res)
 }
 
 # Products this provider does NOT support
@@ -52,7 +53,7 @@ class IEMRadarProvider(RadarProvider):
         logger.info(f"IEM provider switched to radar site: {self._site_id}")
 
     def supported_products(self) -> list[str]:
-        return ["srv"]
+        return ["srv", "ref_hires"]
 
     def _build_tile_url(self, iem_product: str) -> str:
         """Build tile URL through LXC 119 proxy (browser can't do cross-origin reliably)."""
@@ -100,7 +101,8 @@ class IEMRadarProvider(RadarProvider):
             overlay_eligible=rules.get("overlay_eligible", True),
             requires_advanced=rules.get("requires_advanced", False),
             min_zoom=4,
-            max_zoom=10,
+            max_zoom=18,
+            max_native_zoom=10,
         )]
 
     async def get_latest_frame(self, product_id: str) -> RadarLayerInfo | None:

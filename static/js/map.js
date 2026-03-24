@@ -78,13 +78,15 @@ const StormMap = (function () {
         // Settings.applyAll() will add it if showCountyPolygons is true
     }
 
+    const DEFAULT_COUNTY_OPACITY = 0.10;
+
     function defaultCountyStyle() {
         return {
             fillColor: "transparent",
             fillOpacity: 0,
             color: "#1e293b",
             weight: 0.5,
-            opacity: 0.1,
+            opacity: DEFAULT_COUNTY_OPACITY,
         };
     }
 
@@ -98,10 +100,10 @@ const StormMap = (function () {
                 const color = StormState.getEventColor(event);
                 layer.setStyle({
                     fillColor: color,
-                    fillOpacity: 0.35,
+                    fillOpacity: 0.10,
                     color: color,
-                    weight: 1.5,
-                    opacity: 0.7,
+                    weight: 1.0,
+                    opacity: 0.25,
                 });
             } else {
                 layer.setStyle(defaultCountyStyle());

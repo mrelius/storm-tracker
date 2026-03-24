@@ -169,6 +169,9 @@ const PulseCards = (function () {
     // ── Render ───────────────────────────────────────────────────
 
     function _renderStack(entries) {
+        // Reorder stabilization: skip render during lock window
+        if (typeof MobileEnhancements !== "undefined" && MobileEnhancements.isReorderLocked()) return;
+
         let container = document.getElementById("pulse-card-stack");
         if (!container) {
             container = document.createElement("div");

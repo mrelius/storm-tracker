@@ -56,6 +56,18 @@ async def get_radar_frames(
     return RadarFrameSet(product_id=product_id, provider_id=pid, frames=frames)
 
 
+@router.get("/twc-regional")
+async def get_twc_regional():
+    """Get TWC regional radar metadata + tile URL. Falls back to RainViewer info."""
+    from services.radar.twc import get_twc_regional_frame, is_configured
+    if not is_configured():
+        return {"provider": "rainviewer", "fallback": True, "reason": "twc_not_configured"}
+    frame = await get_twc_regional_frame()
+    if not frame:
+        return {"provider": "rainviewer", "fallback": True, "reason": "twc_inventory_failed"}
+    return frame
+
+
 @router.post("/validate-layers")
 async def validate_layer_selection(
     active_products: list[str],

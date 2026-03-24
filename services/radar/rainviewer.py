@@ -53,7 +53,9 @@ class RainViewerProvider(RadarProvider):
         frame_time = datetime.fromtimestamp(timestamp, tz=timezone.utc)
         rules = LAYER_RULES["reflectivity"]
 
-        tile_url = f"/proxy/rainviewer{path}/256/{{z}}/{{x}}/{{y}}/2/1_1.png"
+        # Color scheme 6 = NexRad (operational NWS-style dBZ palette)
+        # Options: smooth=1, snow=1
+        tile_url = f"/proxy/rainviewer{path}/256/{{z}}/{{x}}/{{y}}/6/1_1.png"
 
         return RadarLayerInfo(
             product_id="reflectivity",
@@ -67,7 +69,8 @@ class RainViewerProvider(RadarProvider):
             overlay_eligible=rules["overlay_eligible"],
             requires_advanced=rules["requires_advanced"],
             min_zoom=3,
-            max_zoom=12,
+            max_zoom=18,
+            max_native_zoom=8,
         )
 
     async def get_available_frames(self, product_id: str) -> list[RadarLayerInfo]:
