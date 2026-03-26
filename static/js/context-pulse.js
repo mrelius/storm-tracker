@@ -69,6 +69,7 @@ const ContextPulse = (function () {
         StormState.on("autotrackChanged", _onAutotrackChanged);
         StormState.on("autotrackTargetChanged", _onTargetChanged);
         StormState.on("userMapInteraction", _onUserInteraction);
+        StormState.on("tfeToggled", _evaluateScheduler);
 
         // Start scheduler if already in an eligible mode
         _evaluateScheduler();

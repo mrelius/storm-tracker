@@ -4,12 +4,10 @@
  */
 const StormState = (function () {
     const LAYER_RULES = {
-        reflectivity: { opacity: 1.0, overlayEligible: false, requiresAdvanced: false },
-        ref_hires:    { opacity: 0.85, overlayEligible: false, requiresAdvanced: false },
-        twc_regional: { opacity: 1.0,  overlayEligible: false, requiresAdvanced: false },
         srv:          { opacity: 0.65, overlayEligible: true,  requiresAdvanced: false },
         cc:           { opacity: 0.55, overlayEligible: true,  requiresAdvanced: false },
     };
+
     const ADVANCED_ONLY_COMBOS = [];
     const MAX_ACTIVE_LAYERS = 2;
 
@@ -131,6 +129,81 @@ const StormState = (function () {
             newlyInViewEventIds: [],        // IDs not seen in the previous completed pulse
             newlyInViewCapturedAt: null,    // timestamp when newlyInView was captured (for decay)
             lastPulseInViewEventIds: [],    // baseline from last completed pulse (for newness diff)
+        },
+
+        // ── Context Zoom Runtime (transient — never persist) ───────
+        contextZoomRuntime: {
+            active: false,
+            reason: null,                   // "multi_alert" | "severity_spc" | null
+            enteredAt: null,
+            suppressedUntil: null,
+            currentClusterId: null,
+            zoomMode: null,                 // "normal_context" | "spc_context" | null
+        },
+
+        // ── SPC Auto-Selection (transient) ─────────────────────────
+        spcAuto: {
+            activeDay: null,                // 1 | 2 | 3 | null
+            selectedCategory: null,         // "TSTM" | "MRGL" | ... | null
+            lastSelectionAt: null,
+            authority: "auto_track",        // "auto_track" | "user_manual"
+        },
+
+
+        // ── Impact Zone (transient — never persist) ─────────────────
+        impactZone: {
+            active: false,
+            corridorsByEventId: {},     // eventId -> { minutes, polygon, bbox }
+            impactsByEventId: {},       // eventId -> { places[], highestPriorityPlace }
+            lastComputedAt: null,
+        },
+
+        // ── Motion Tracking (transient — never persist) ─────────────
+        motion: {
+            history: {},            // eventId -> [{lat, lon, ts}]
+            vectors: {},            // eventId -> {speedMph, bearingDeg, lastUpdated}
+        },
+
+        // ── SPC Visual Blending (transient) ────────────────────────
+        spcVisual: {
+            activeDay: null,
+            categoryMap: {},            // eventId -> SPC category (e.g. "ENH")
+            lastComputedAt: 0,
+        },
+
+        // ── Demo Audio State (transient — never persist) ────────────
+        demoAudio: {
+            enabled: false,
+            scenarioId: null,
+            playbackState: "idle",       // "idle" | "loading" | "playing" | "paused" | "error" | "unavailable"
+            muted: false,
+            volume: 1.0,
+            selectedSourceId: null,
+            selectedSourceType: null,     // "event" | "scanner" | "weather_radio" | "fallback" | "custom" | null
+            streamTitle: null,
+            streamSubtitle: null,
+            eventId: null,
+            errorCode: null,
+            errorMessage: null,
+            autoTrackBound: false,
+            fallbackActive: false,
+            lastScenarioAppliedAt: null,
+        },
+
+        // ── Audio Speaking Alert Control ─────────────────────────────
+        audioEnabled: true,         // master toggle for spoken alerts
+
+        // ── Storm Visualization Feature Flag ─────────────────────────
+        vizEnabled: true,           // master toggle for storm viz engine
+
+        // ── User Map Preferences (persisted via localStorage) ──────
+        userPrefs: {
+            multiAlertColorMode: "stable_palette",
+            spcMode: "auto_most_severe",    // "manual" | "auto_most_severe"
+            spcManualDay: null,             // 1 | 2 | 3 | null
+            flashPolygons: true,
+            polygonFlashCriticalOnly: true,
+            spcEscalationEnabled: true,
         },
     };
 
@@ -269,6 +342,10 @@ const StormState = (function () {
         }
         emit("autotrackChanged", { mode, prev });
     }
+
+    // ── AI Advisory State (initialized by AIPanel.init) ─────────
+    // state.ai is added dynamically by ai-panel.js
+    // Events: "aiSummaryUpdated", "aiNarrationUpdated"
 
     return {
         state, on, emit,

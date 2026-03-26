@@ -5,6 +5,7 @@ from models import AlertOut, AlertCountyMap, AlertSortField, SortOrder, AlertCat
 from db import get_connection
 from datetime import datetime, timezone
 import cache
+from services.freshness import check as freshness_check, validate_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,14 @@ async def list_alerts(
                     alert.distance_mi = round(
                         haversine_mi(lat, lon, county["centroid_lat"], county["centroid_lon"]), 1
                     )
+
+            # HARD FAIL: freshness check on expires timestamp
+            # Alerts past their expiration + max_age buffer are dropped
+            expires_epoch = validate_timestamp(alert.expires)
+            if expires_epoch:
+                fr = freshness_check("nws_alerts", expires_epoch, entity_id=alert.id)
+                if not fr["is_fresh"] and fr["action"] == "drop":
+                    continue  # expired alert — hard fail, never reaches UI
 
             alerts.append(alert)
 

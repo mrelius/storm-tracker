@@ -36,6 +36,40 @@ const Camera = (function () {
             // GPS and AT have their own pause mechanisms.
             // Camera ownership only changes on explicit mode changes.
         });
+
+        // Dev guard: warn on illegal direct flyTo/setView outside Camera.move
+        setTimeout(() => {
+            const map = StormMap.getMap();
+            if (!map) return;
+            let _inCameraMove = false;
+
+            const origFlyTo = map.flyTo.bind(map);
+            map.flyTo = function (...args) {
+                if (!_inCameraMove) {
+                    console.warn("ILLEGAL flyTo call — use Camera.move()", new Error().stack);
+                }
+                return origFlyTo(...args);
+            };
+
+            const origSetView = map.setView.bind(map);
+            map.setView = function (...args) {
+                if (!_inCameraMove) {
+                    console.warn("ILLEGAL setView call — use Camera.move()", new Error().stack);
+                }
+                return origSetView(...args);
+            };
+
+            const origFlyToBounds = map.flyToBounds.bind(map);
+            map.flyToBounds = function (...args) {
+                if (!_inCameraMove) {
+                    console.warn("ILLEGAL flyToBounds call — use Camera.move()", new Error().stack);
+                }
+                return origFlyToBounds(...args);
+            };
+
+            // Expose internal flag setter for Camera.move
+            Camera._setInMove = (v) => { _inCameraMove = v; };
+        }, 500);
     }
 
     /**
@@ -66,17 +100,33 @@ const Camera = (function () {
         const map = StormMap.getMap();
         if (!map) return false;
 
+        // Structured log for camera moves
+        if (typeof STLogger !== "undefined") {
+            STLogger.for("camera").info("camera_move", {
+                source,
+                center: opts.center ? (Array.isArray(opts.center) ? opts.center : [opts.center.lat, opts.center.lng]) : null,
+                zoom: opts.zoom || null,
+                reason: opts.reason || null,
+                hasBounds: !!opts.bounds,
+            });
+        }
+
         // Execute the move
-        if (opts.bounds) {
-            map.flyToBounds(opts.bounds, opts.flyOptions || {});
-        } else if (opts.center) {
-            const center = Array.isArray(opts.center) ? opts.center : [opts.center.lat, opts.center.lng];
-            const zoom = opts.zoom || map.getZoom();
-            if (opts.animate === false) {
-                map.setView(center, zoom, { animate: false });
-            } else {
-                map.flyTo(center, zoom, opts.flyOptions || {});
+        if (Camera._setInMove) Camera._setInMove(true);
+        try {
+            if (opts.bounds) {
+                map.flyToBounds(opts.bounds, opts.flyOptions || {});
+            } else if (opts.center) {
+                const center = Array.isArray(opts.center) ? opts.center : [opts.center.lat, opts.center.lng];
+                const zoom = opts.zoom || map.getZoom();
+                if (opts.animate === false) {
+                    map.setView(center, zoom, { animate: false });
+                } else {
+                    map.flyTo(center, zoom, opts.flyOptions || {});
+                }
             }
+        } finally {
+            if (Camera._setInMove) Camera._setInMove(false);
         }
 
         return true;

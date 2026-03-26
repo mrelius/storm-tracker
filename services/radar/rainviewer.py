@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from services.radar.base import RadarProvider
 from models import RadarLayerInfo
 from config import LAYER_RULES
+from services.freshness import check as freshness_check, record_update
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +54,9 @@ class RainViewerProvider(RadarProvider):
         frame_time = datetime.fromtimestamp(timestamp, tz=timezone.utc)
         rules = LAYER_RULES["reflectivity"]
 
-        # Color scheme 6 = NexRad (operational NWS-style dBZ palette)
+        # Color scheme 2 = The Weather Channel style (clean consumer palette)
         # Options: smooth=1, snow=1
-        tile_url = f"/proxy/rainviewer{path}/256/{{z}}/{{x}}/{{y}}/6/1_1.png"
+        tile_url = f"/proxy/rainviewer{path}/256/{{z}}/{{x}}/{{y}}/2/1_1.png"
 
         return RadarLayerInfo(
             product_id="reflectivity",
@@ -83,10 +84,23 @@ class RainViewerProvider(RadarProvider):
 
         frames = []
         radar = data["radar"]
+        stale_count = 0
         for entry in radar.get("past", []):
+            fr = freshness_check("radar_reflectivity", entry["time"])
+            if not fr["is_fresh"] and fr["action"] in ("drop", "expire"):
+                stale_count += 1
+                continue  # skip stale frames
             frames.append(self._build_layer(entry["time"], entry["path"]))
         for entry in radar.get("nowcast", []):
             frames.append(self._build_layer(entry["time"], entry["path"]))
+
+        if stale_count:
+            logger.info(f"RainViewer: dropped {stale_count} stale frames")
+
+        # Record freshness for newest frame
+        if frames:
+            newest_ts = max(f.timestamp.timestamp() for f in frames if f.timestamp)
+            record_update("radar_reflectivity", newest_ts)
 
         return frames
 

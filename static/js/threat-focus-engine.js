@@ -31,8 +31,12 @@ const ThreatFocusEngine = (function () {
     }
 
     function setFeatureFlag(enabled) {
+        const prev = _featureEnabled;
         _featureEnabled = !!enabled;
-        if (log) log.info("tfe_feature_flag", { enabled: _featureEnabled });
+        if (log) log.info("tfe_toggle", { enabled: _featureEnabled, prev });
+        if (prev !== _featureEnabled) {
+            StormState.emit("tfeToggled", { enabled: _featureEnabled });
+        }
     }
 
     // ── State ────────────────────────────────────────────────────

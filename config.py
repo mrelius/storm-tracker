@@ -53,10 +53,10 @@ ALERT_CATEGORIES = {
 # Radar layer rules
 LAYER_RULES = {
     "reflectivity": {
-        "opacity": 1.0,
+        "opacity": 0.80,
         "overlay_eligible": False,
         "requires_advanced": False,
-        "display_name": "Reflectivity",
+        "display_name": "Radar",
     },
     "srv": {
         "opacity": 0.65,

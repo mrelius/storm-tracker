@@ -60,9 +60,16 @@ async def deep_health():
         db_ok = False
         subsystems["db"] = {"status": "error", "error": str(e)[:100]}
 
+    redis_mem = cache.get_memory_info()
+    cache_status = "ok"
+    if not cache.is_available():
+        cache_status = "unavailable"
+    elif redis_mem.get("used_pct", 0) > 85:
+        cache_status = "warning"
     subsystems["cache"] = {
-        "status": "ok" if cache.is_available() else "unavailable",
+        "status": cache_status,
         "stats": cache.get_stats(),
+        "memory": redis_mem,
     }
 
     # NWS ingest
@@ -131,6 +138,35 @@ async def deep_health():
             subsystems["detection"] = {"status": "unavailable"}
     except Exception:
         subsystems["detection"] = {"status": "unavailable"}
+
+    # DB maintenance
+    try:
+        from services.db_maintenance import get_maintenance_stats, check_db_size
+        maint = get_maintenance_stats()
+        db_size = check_db_size()
+        subsystems["db_maintenance"] = {
+            "status": "ok" if db_size < 150 else "warning",
+            "db_size_mb": round(db_size, 1),
+            "purge_runs": maint["purge_runs"],
+            "purge_rows_deleted": maint["purge_rows_deleted"],
+            "raw_json_trimmed": maint["raw_json_trimmed"],
+            "vacuum_runs": maint["vacuum_runs"],
+        }
+    except Exception as e:
+        subsystems["db_maintenance"] = {"status": "error", "error": str(e)[:100]}
+
+    # Data freshness
+    try:
+        from services.freshness import get_dashboard_data
+        fd = get_dashboard_data()
+        subsystems["freshness"] = {
+            "status": fd["overall_status"],
+            "health_score": fd["overall_health"],
+            "stale_sources": fd["stale_sources"],
+            "recent_drops": len(fd["recent_drops"]),
+        }
+    except Exception as e:
+        subsystems["freshness"] = {"status": "error", "error": str(e)[:100]}
 
     # Process metrics
     try:

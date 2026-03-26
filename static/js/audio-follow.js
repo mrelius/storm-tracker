@@ -393,6 +393,7 @@ const AudioFollow = (function () {
         // Listen to autotrack events — NOT map interaction
         StormState.on("autotrackTargetChanged", onTargetChanged);
         StormState.on("autotrackChanged", onAutoTrackModeChanged);
+        StormState.on("tfeToggled", () => { evaluateRouting("tfe_toggle"); });
 
         // Detect manual audio actions on the same audio element
         // (Manual play from external control would set owner to manual)

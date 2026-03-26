@@ -79,9 +79,13 @@ const SessionPersist = (function () {
 
         // Restore map position
         if (saved.mapCenter && saved.mapZoom) {
-            const map = StormMap.getMap();
-            if (map) {
-                map.setView([saved.mapCenter.lat, saved.mapCenter.lng], saved.mapZoom, { animate: false });
+            if (typeof Camera !== "undefined") {
+                Camera.move({ source: "idle", center: [saved.mapCenter.lat, saved.mapCenter.lng], zoom: saved.mapZoom, animate: false, reason: "session_restore" });
+            } else {
+                const map = StormMap.getMap();
+                if (map) {
+                    map.setView([saved.mapCenter.lat, saved.mapCenter.lng], saved.mapZoom, { animate: false });
+                }
             }
         }
 

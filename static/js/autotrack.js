@@ -120,7 +120,7 @@ const AutoTrack = (function () {
         const { mode, prev } = data;
 
         if (mode === "off") {
-            if (typeof Camera !== "undefined") Camera.release("autotrack");
+            if (typeof Camera !== "undefined") Camera.release("autotrack"); // CameraPolicy manages ownership
             stopEvalLoop();
             stopStormAlertFetch();
             clearFollowPause();
@@ -158,7 +158,7 @@ const AutoTrack = (function () {
             }
             panelAutoCollapsed = false;
         } else {
-            if (typeof Camera !== "undefined") Camera.claim("autotrack", "mode " + mode);
+            if (typeof CameraPolicy !== "undefined" && CameraPolicy.requestMode) { CameraPolicy.requestMode("AUTO_TRACK"); } else if (typeof Camera !== "undefined") { Camera.claim("autotrack", "mode " + mode); }
             // Auto-collapse panel when AT activates (only from off → on)
             if (prev === "off" && StormState.state.alerts.panelOpen) {
                 StormState.togglePanel();
@@ -199,7 +199,9 @@ const AutoTrack = (function () {
         emitDebug();
 
         if (followPauseTimer) clearTimeout(followPauseTimer);
+        const pauseTargetId = currentTargetId;
         followPauseTimer = setTimeout(() => {
+            if (StormState.state.autotrack.targetAlertId !== pauseTargetId) return;
             at.followPaused = false;
             followPauseTimer = null;
             setDecision("follow_resumed", `Map follow resumed after ${USER_PAUSE_MS / 1000}s`);
@@ -778,11 +780,16 @@ const AutoTrack = (function () {
                 reason: isNewTarget ? "new_target" : "reframe",
             });
         } else {
-            map.flyToBounds(frameBounds, {
-                padding: [60, 60],
-                maxZoom: zoom,
-                duration: camProfile.duration,
-                easeLinearity: camProfile.easeLinearity,
+            Camera.move({
+                source: "autotrack",
+                bounds: frameBounds,
+                flyOptions: {
+                    padding: [60, 60],
+                    maxZoom: zoom,
+                    duration: camProfile.duration,
+                    easeLinearity: camProfile.easeLinearity,
+                },
+                reason: "reframe_fallback",
             });
         }
 

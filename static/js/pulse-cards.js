@@ -24,6 +24,7 @@ const PulseCards = (function () {
             else update();
         });
         StormState.on("alertsUpdated", update);
+        StormState.on("tfeToggled", update);
         cardTimer = setInterval(update, 5000);
     }
 

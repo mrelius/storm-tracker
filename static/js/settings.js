@@ -131,7 +131,7 @@ const Settings = (function () {
         const panel = document.getElementById("settings-panel");
         if (panel) {
             panel.classList.toggle("hidden", !panelVisible);
-            if (panelVisible) syncUI();
+            if (panelVisible) { syncUI(); _syncLocUI(panel); }
         }
     }
 
@@ -229,6 +229,65 @@ const Settings = (function () {
                     <label class="settings-label">Simple Mode</label>
                     <button id="btn-simple-mode" class="sett-toggle"></button>
                 </div>
+                <div class="settings-group">
+                    <label class="settings-label">Audio Tests</label>
+                    <div class="settings-row">
+                        <button id="sett-noaa-test" class="sett-btn">Test NOAA Stream</button>
+                        <button id="sett-tone-test" class="sett-btn">Test Audio Tone</button>
+                    </div>
+                </div>
+                <div class="settings-group">
+                    <label class="settings-label">Saved Locations</label>
+                    <div class="sett-loc-block" data-slot="home">
+                        <div class="sett-loc-name-row">
+                            <span class="sett-loc-icon">\uD83C\uDFE0</span>
+                            <input type="text" id="sett-label-home" class="sett-loc-name" placeholder="Home" maxlength="30">
+                            <span id="sett-badge-home" class="sett-loc-badge"></span>
+                        </div>
+                        <div class="sett-loc-row">
+                            <input type="text" id="sett-loc-home" class="sett-loc-input" placeholder="Enter address...">
+                            <button class="sett-loc-save" data-slot="home">Save</button>
+                            <button class="sett-loc-pin" data-slot="home" data-kind="home" title="Drop pin on map">\uD83D\uDCCD</button>
+                            <button class="sett-loc-clear" data-slot="home" title="Clear">\u2715</button>
+                        </div>
+                        <div id="sett-meta-home" class="sett-loc-meta"></div>
+                    </div>
+                    <div class="sett-loc-block" data-slot="work1">
+                        <div class="sett-loc-name-row">
+                            <span class="sett-loc-icon">\uD83D\uDCBC</span>
+                            <input type="text" id="sett-label-work1" class="sett-loc-name" placeholder="Work 1" maxlength="30">
+                            <span id="sett-badge-work1" class="sett-loc-badge"></span>
+                        </div>
+                        <div class="sett-loc-row">
+                            <input type="text" id="sett-loc-work1" class="sett-loc-input" placeholder="Enter address...">
+                            <button class="sett-loc-save" data-slot="work1">Save</button>
+                            <button class="sett-loc-pin" data-slot="work1" data-kind="work" title="Drop pin on map">\uD83D\uDCCD</button>
+                            <button class="sett-loc-clear" data-slot="work1" title="Clear">\u2715</button>
+                        </div>
+                        <div id="sett-meta-work1" class="sett-loc-meta"></div>
+                    </div>
+                    <div class="sett-loc-block" data-slot="work2">
+                        <div class="sett-loc-name-row">
+                            <span class="sett-loc-icon">\uD83D\uDCBC</span>
+                            <input type="text" id="sett-label-work2" class="sett-loc-name" placeholder="Work 2" maxlength="30">
+                            <span id="sett-badge-work2" class="sett-loc-badge"></span>
+                        </div>
+                        <div class="sett-loc-row">
+                            <input type="text" id="sett-loc-work2" class="sett-loc-input" placeholder="Enter address...">
+                            <button class="sett-loc-save" data-slot="work2">Save</button>
+                            <button class="sett-loc-pin" data-slot="work2" data-kind="work" title="Drop pin on map">\uD83D\uDCCD</button>
+                            <button class="sett-loc-clear" data-slot="work2" title="Clear">\u2715</button>
+                        </div>
+                        <div id="sett-meta-work2" class="sett-loc-meta"></div>
+                    </div>
+                    <div id="sett-loc-status" class="sett-loc-status"></div>
+                    <div id="sett-loc-hint" class="sett-loc-hint">Set your Home location to improve local awareness</div>
+                </div>
+                <div class="settings-divider"></div>
+                <div id="sett-ai-section">
+                    ${typeof AIPanel !== "undefined" ? AIPanel.getSettingsHTML() : '<div class="settings-group"><label class="settings-label">AI Advisory</label><span class="settings-val">Not loaded</span></div>'}
+                </div>
+                <div class="settings-divider"></div>
                 <div class="settings-group">
                     <button id="btn-feedback" class="sett-btn" style="width:100%">Send Feedback</button>
                 </div>
@@ -374,6 +433,188 @@ const Settings = (function () {
             syncUI();
         });
 
+        // Saved locations
+        panel.querySelectorAll(".sett-loc-save").forEach(btn => {
+            btn.addEventListener("click", async () => {
+                const slot = btn.dataset.slot;
+                const input = panel.querySelector("#sett-loc-" + slot);
+                const status = panel.querySelector("#sett-loc-status");
+                if (!input || !status) return;
+
+                const address = input.value.trim();
+                if (!address) {
+                    status.textContent = "Enter an address";
+                    return;
+                }
+
+                btn.disabled = true;
+                status.textContent = "Geocoding...";
+
+                if (typeof IdleAwareness !== "undefined" && IdleAwareness.setSavedLocation) {
+                    const result = await IdleAwareness.setSavedLocation(slot, address);
+                    if (result.ok) {
+                        if (result.cleared) {
+                            status.textContent = "Cleared " + slot;
+                            status.style.color = "#94a3b8";
+                        } else {
+                            const badge = result.precision === "exact" ? "Geocoded" : "Approximate";
+                            const color = result.precision === "exact" ? "#34d399" : "#fbbf24";
+                            status.textContent = `Saved (${badge}): ` + (result.displayName || address).slice(0, 45);
+                            status.style.color = color;
+                        }
+                        // Refresh the full UI row
+                        _syncLocUI(panel);
+                        const hint = panel.querySelector("#sett-loc-hint");
+                        if (hint) hint.style.display = "none";
+                    } else {
+                        status.textContent = "Failed: " + (result.error || "unknown");
+                        status.style.color = "#f87171";
+                    }
+                } else {
+                    status.textContent = "IDLE system not available";
+                    status.style.color = "#f87171";
+                }
+                btn.disabled = false;
+                setTimeout(() => { status.textContent = ""; }, 4000);
+            });
+        });
+
+        // userLabel save-on-blur
+        for (const slot of ["home", "work1", "work2"]) {
+            const labelInput = panel.querySelector("#sett-label-" + slot);
+            if (labelInput) {
+                labelInput.addEventListener("blur", () => {
+                    if (typeof IdleAwareness === "undefined") return;
+                    const st = IdleAwareness.getState();
+                    const loc = st.savedLocations?.[slot];
+                    if (!loc) return;
+                    // Sanitize: trim, collapse spaces, max 60 chars
+                    let newLabel = labelInput.value.trim().replace(/\s+/g, " ").slice(0, 60);
+                    // If empty after trim, revert to slot default
+                    if (!newLabel) {
+                        const defaults = { home: "Home", work1: "Work 1", work2: "Work 2" };
+                        newLabel = loc.userLabel || defaults[slot] || slot;
+                        labelInput.value = newLabel;
+                    }
+                    const oldLabel = loc.userLabel;
+                    if (newLabel !== oldLabel) {
+                        loc.userLabel = newLabel;
+                        loc.label = newLabel;
+                        try { localStorage.setItem("idle_saved_locations", JSON.stringify(st.savedLocations)); } catch(e) {}
+                        // Log label edit
+                        if (typeof STLogger !== "undefined") {
+                            STLogger.for("idle_aware").info("location_user_label_updated", { slot, old_value: oldLabel, new_value: newLabel });
+                        }
+                    }
+                });
+            }
+        }
+
+        // Load existing saved location values into inputs
+        _syncLocUI(panel);
+    }
+
+    function _syncLocUI(panel) {
+        if (!panel) panel = document.getElementById("settings-panel");
+        if (!panel || typeof IdleAwareness === "undefined") return;
+
+        const BADGE_TEXT = { manual_pin: "Manual Pin", exact: "Geocoded", approximate: "Approximate" };
+        const BADGE_COLOR = { manual_pin: "#34d399", exact: "#34d399", approximate: "#fbbf24" };
+
+        {
+            const st = IdleAwareness.getState();
+            const sl = st.savedLocations || {};
+            let hasAny = false;
+            for (const slot of ["home", "work1", "work2"]) {
+                const addrInput = panel.querySelector("#sett-loc-" + slot);
+                const labelInput = panel.querySelector("#sett-label-" + slot);
+                const badge = panel.querySelector("#sett-badge-" + slot);
+                const meta = panel.querySelector("#sett-meta-" + slot);
+                const loc = sl[slot];
+
+                if (!loc) {
+                    if (badge) { badge.textContent = ""; }
+                    if (meta) { meta.textContent = ""; }
+                    continue;
+                }
+                hasAny = true;
+
+                // Name field: userLabel or default
+                if (labelInput) {
+                    labelInput.value = loc.userLabel || loc.label || "";
+                }
+
+                // Address field: resolvedLabel or address or coords
+                if (addrInput) {
+                    addrInput.value = loc.resolvedLabel || loc.address || `(${loc.lat?.toFixed(4)}, ${loc.lng?.toFixed(4)})`;
+                }
+
+                // Badge
+                if (badge) {
+                    const p = loc.precision || "approximate";
+                    badge.textContent = BADGE_TEXT[p] || p;
+                    badge.style.color = BADGE_COLOR[p] || "#94a3b8";
+                }
+
+                // Meta line: secondary info
+                if (meta) {
+                    const parts = [];
+                    if (loc.precision === "manual_pin" && loc.resolvedLabel) {
+                        parts.push(loc.resolvedLabel.slice(0, 50));
+                    }
+                    if (loc.lat != null) parts.push(`${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}`);
+                    meta.textContent = parts.join(" · ");
+                }
+            }
+            if (hasAny) {
+                const hint = panel.querySelector("#sett-loc-hint");
+                if (hint) hint.style.display = "none";
+            }
+        }
+
+        // Pin drop buttons
+        panel.querySelectorAll(".sett-loc-pin").forEach(btn => {
+            btn.addEventListener("click", () => {
+                const slot = btn.dataset.slot;
+                const kind = btn.dataset.kind || "home";
+                // Close settings panel first so map is clickable
+                togglePanel();
+                if (typeof IdleAwareness !== "undefined" && IdleAwareness.enterPinMode) {
+                    IdleAwareness.enterPinMode(slot, kind);
+                }
+            });
+        });
+
+        // Clear buttons
+        panel.querySelectorAll(".sett-loc-clear").forEach(btn => {
+            btn.addEventListener("click", async () => {
+                const slot = btn.dataset.slot;
+                const status = panel.querySelector("#sett-loc-status");
+                if (typeof IdleAwareness !== "undefined" && IdleAwareness.setSavedLocation) {
+                    await IdleAwareness.setSavedLocation(slot, "");
+                    const input = panel.querySelector("#sett-loc-" + slot);
+                    if (input) input.value = "";
+                    if (status) { status.textContent = "Cleared " + slot; status.style.color = "#94a3b8"; }
+                }
+            });
+        });
+
+        // Audio test buttons (proxied from toolbar originals)
+        const settNoaaTest = panel.querySelector("#sett-noaa-test");
+        const settToneTest = panel.querySelector("#sett-tone-test");
+        if (settNoaaTest) {
+            settNoaaTest.addEventListener("click", () => {
+                const orig = document.getElementById("btn-noaa-test");
+                if (orig) orig.click();
+            });
+        }
+        if (settToneTest) {
+            settToneTest.addEventListener("click", () => {
+                const orig = document.getElementById("btn-tone-test");
+                if (orig) orig.click();
+            });
+        }
+
         // Reset
         panel.querySelector("#sett-reset").addEventListener("click", () => {
             current = { ...DEFAULTS };
@@ -381,6 +622,9 @@ const Settings = (function () {
             applyAll();
             syncUI();
         });
+
+        // Wire AI settings controls
+        if (typeof AIPanel !== "undefined") AIPanel.bindSettingsControls();
     }
 
     function syncUI() {

@@ -601,6 +601,9 @@ def _alert_to_dict(alert: StormAlert) -> dict:
         # Lifecycle
         "lifecycle_state": lifecycle_state,
         "lifecycle_signal": lifecycle_signal,
+        # Freshness
+        "freshness_status": getattr(alert, "freshness_status", "fresh"),
+        "data_age_sec": getattr(alert, "data_age_sec", 0.0),
     }
 
 

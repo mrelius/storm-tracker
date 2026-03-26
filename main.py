@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 import uuid
 import logging
@@ -26,7 +27,7 @@ from services.radar.rainviewer import RainViewerProvider
 from services.radar.iem import IEMRadarProvider
 from services.radar.nexrad_cc import NexradCCProvider
 from fastapi import WebSocket, WebSocketDisconnect
-from routers import alerts, radar, location, health, detections, storm_alerts, feedback, prediction, spc, guidance
+from routers import alerts, radar, location, health, detections, storm_alerts, feedback, prediction, spc, guidance, ai, freshness, storm, storm_demo
 
 settings = get_settings()
 setup_logging(settings.log_level)
@@ -34,6 +35,8 @@ logger = get_logger("main")
 
 _ingest_task: asyncio.Task | None = None
 _alert_task: asyncio.Task | None = None
+_ai_worker_task: asyncio.Task | None = None
+_ai_health_task: asyncio.Task | None = None
 
 
 @asynccontextmanager
@@ -43,6 +46,28 @@ async def lifespan(app: FastAPI):
     await init_db()
     await seed_counties()
     cache.init_cache()
+
+    # Initialize authoritative storm state
+    from services.storm_state import register_primary_callback
+    def _log_primary_change(old_id, new_id):
+        logger.info("primary_target_changed", old_id=old_id, new_id=new_id)
+    register_primary_callback(_log_primary_change)
+
+    # Register state-changed broadcast callback
+    from services.storm_state import register_state_changed_callback
+
+    def _on_storm_state_changed(snapshot):
+        """Bridge sync callback to async WS broadcast."""
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_broadcast_storm_state(snapshot))
+        except RuntimeError:
+            pass  # No event loop — skip broadcast
+
+    register_state_changed_callback(_on_storm_state_changed)
+    logger.info("storm_state initialized with WS broadcast")
+
     Path("data/cc_tiles").mkdir(parents=True, exist_ok=True)
 
     # Register radar providers
@@ -67,7 +92,19 @@ async def lifespan(app: FastAPI):
     _spc_task = asyncio.create_task(run_spc_loop())
     _env_task = asyncio.create_task(run_environment_loop())
 
-    logger.info("Storm Tracker started")
+    # Start AI advisory subsystem (remote Ollama over LAN)
+    global _ai_worker_task, _ai_health_task
+    from services.ai.ai_queue import init as init_ai_queue
+    from services.ai.ai_worker import run_worker as run_ai_worker, run_health_loop as run_ai_health, stop as stop_ai
+    init_ai_queue()
+    _ai_health_task = asyncio.create_task(run_ai_health())
+    _ai_worker_task = asyncio.create_task(run_ai_worker())
+
+    # Start DB maintenance loop (purge, vacuum, raw_json trim)
+    from services.db_maintenance import run_maintenance_loop, stop_maintenance
+    _maintenance_task = asyncio.create_task(run_maintenance_loop())
+
+    logger.info("Storm Tracker started (with AI advisory + DB maintenance)")
 
     yield
 
@@ -76,7 +113,9 @@ async def lifespan(app: FastAPI):
     stop_alert_loop()
     stop_spc()
     stop_environment()
-    for task in [_ingest_task, _alert_task, _spc_task, _env_task]:
+    stop_ai()
+    stop_maintenance()
+    for task in [_ingest_task, _alert_task, _spc_task, _env_task, _ai_worker_task, _ai_health_task, _maintenance_task]:
         if task:
             task.cancel()
             try:
@@ -128,6 +167,10 @@ app.include_router(feedback.router)
 app.include_router(prediction.router)
 app.include_router(spc.router)
 app.include_router(guidance.router)
+app.include_router(ai.router)
+app.include_router(freshness.router)
+app.include_router(storm.router)
+app.include_router(storm_demo.router)
 
 _sim_last_call = 0
 _SIM_RATE_LIMIT = 5  # seconds between simulate calls
@@ -281,6 +324,24 @@ async def debug_features():
     }
 
 
+@app.get("/api/debug/build")
+async def debug_build():
+    """Return active build identity from deployed .build-info.json."""
+    import json as _json
+    build_file = Path(__file__).parent / ".build-info.json"
+    deploy_file = Path(__file__).parent / ".last_deploy.json"
+    result = {}
+    if build_file.exists():
+        result["build"] = _json.loads(build_file.read_text())
+    else:
+        result["build"] = {"error": ".build-info.json not found"}
+    if deploy_file.exists():
+        result["deploy"] = _json.loads(deploy_file.read_text())
+    else:
+        result["deploy"] = None
+    return result
+
+
 @app.websocket("/ws/storm-alerts")
 async def storm_alerts_ws(ws: WebSocket):
     import json as _json
@@ -323,6 +384,79 @@ async def storm_alerts_ws(ws: WebSocket):
         manager.disconnect(ws)
     except Exception:
         manager.disconnect(ws)
+
+
+# ── Storm State WebSocket — Unified broadcast ────────────────────
+# All storm_state changes (demo + live) are broadcast here.
+# Frontend connects once, receives state_sync messages.
+
+_storm_state_ws_clients: set = set()
+_storm_state_seq: int = 0
+
+
+@app.websocket("/ws/storm-state")
+async def storm_state_ws(ws: WebSocket):
+    """WebSocket for unified storm state updates.
+
+    On connect: sends full state snapshot.
+    On state change: broadcasts state_sync with sequence_id.
+    Ordering guaranteed by monotonic sequence_id.
+    """
+    await ws.accept()
+    _storm_state_ws_clients.add(ws)
+    logger.info("ws_storm_state_connected", clients=len(_storm_state_ws_clients))
+
+    # Send initial state
+    try:
+        from services.storm_state import get_serializable_state
+        state = get_serializable_state()
+        state["type"] = "state_sync"
+        await ws.send_json(state)
+    except Exception as e:
+        logger.warning(f"ws_storm_state initial send failed: {e}")
+        _storm_state_ws_clients.discard(ws)
+        return
+
+    # Keep alive — listen for pings
+    try:
+        while True:
+            data = await ws.receive_text()
+            if data == "ping":
+                await ws.send_json({"type": "pong"})
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        _storm_state_ws_clients.discard(ws)
+        logger.info("ws_storm_state_disconnected", clients=len(_storm_state_ws_clients))
+
+
+async def _broadcast_storm_state(snapshot: dict):
+    """Broadcast state_sync to all connected /ws/storm-state clients."""
+    if not _storm_state_ws_clients:
+        return
+
+    message = dict(snapshot)
+    message["type"] = "state_sync"
+
+    payload = json.dumps(message, default=str)
+    dead = []
+
+    for ws in list(_storm_state_ws_clients):
+        try:
+            await ws.send_text(payload)
+        except Exception:
+            dead.append(ws)
+
+    for ws in dead:
+        _storm_state_ws_clients.discard(ws)
+
+    logger.info("ws_broadcast_storm_state",
+                sequence_id=message.get("sequence_id", 0),
+                alert_count=message.get("polygon_count", 0),
+                primary_id=message.get("primary_id"),
+                clients=len(_storm_state_ws_clients))
 
 
 # ── Phase 2: Client telemetry endpoint ───────────────────────────

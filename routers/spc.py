@@ -3,7 +3,7 @@ Storm Tracker — SPC Data API Router
 
 GET /api/spc/data       → Raw SPC data (outlook, watches, MDs)
 GET /api/spc/risk       → Regional risk assessment for user location
-GET /api/spc/outlook    → Day 1 outlook GeoJSON (for map overlay)
+GET /api/spc/outlook    → Outlook GeoJSON (supports day=1,2,3)
 GET /api/spc/watches    → Active watch polygons (for map overlay)
 
 SPC data is sourced from NOAA/NWS/SPC public feeds.
@@ -27,8 +27,17 @@ router = APIRouter(prefix="/api/spc", tags=["spc"])
 async def spc_data():
     """Return raw SPC data snapshot (outlook, watches, MDs)."""
     data = get_spc_data()
+    outlooks_info = {}
+    for day in [1, 2, 3]:
+        outlook = data["outlooks"].get(day)
+        outlooks_info[f"day{day}"] = {
+            "features": len(outlook["features"]) if outlook else 0,
+            "updated": data["outlooks_updated"].get(day, 0),
+        }
+
     return {
         "outlook_features": len(data["outlook"]["features"]) if data.get("outlook") else 0,
+        "outlooks": outlooks_info,
         "watches": len(data.get("watches", [])),
         "mesoscale": len(data.get("mesoscale", [])),
         "last_poll": data.get("last_poll", 0),
@@ -96,12 +105,18 @@ async def spc_risk(
 
 
 @router.get("/outlook")
-async def spc_outlook():
-    """Return Day 1 outlook GeoJSON for direct map overlay."""
+async def spc_outlook(
+    day: int = Query(1, ge=1, le=3, description="SPC outlook day (1, 2, or 3)"),
+):
+    """Return categorical outlook GeoJSON for specified day. Defaults to Day 1."""
     data = get_spc_data()
-    outlook = data.get("outlook")
+    outlook = data["outlooks"].get(day)
     if not outlook:
-        return {"type": "FeatureCollection", "features": []}
+        # Fallback to legacy Day 1 field
+        if day == 1:
+            outlook = data.get("outlook")
+        if not outlook:
+            return {"type": "FeatureCollection", "features": []}
     return outlook
 
 

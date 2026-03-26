@@ -7,6 +7,13 @@
 const RadarManager = (function () {
     let map = null;
 
+    // ── Central Radar State (authoritative, not DOM) ───────────────
+    const radarState = {
+        layers: { srv: false, cc: false },
+        animation: { running: false, currentFrame: 0, totalFrames: 0 },
+        errors: { srv: false, cc: false },
+    };
+
     // Frame management
     let frameMeta = [];         // RadarLayerInfo[] from API
     let frameLayers = [];       // L.tileLayer[] (preloaded, opacity 0)
@@ -29,16 +36,41 @@ const RadarManager = (function () {
 
     let manualSiteOverride = null;  // null = auto/nearest
 
+    // ── Button State Rendering (state-driven, not DOM-driven) ──────
+
+    function setButtonState(btnId, active) {
+        const btn = document.getElementById(btnId);
+        if (!btn) return;
+        btn.classList.toggle("active", active);
+    }
+
+    function setErrorState(btnId, error, msg) {
+        const btn = document.getElementById(btnId);
+        if (!btn) return;
+        btn.classList.toggle("srv-error", error);
+        if (error && msg) btn.title = msg;
+    }
+
+    function renderRadarButtons() {
+        setButtonState("btn-srv-toggle", radarState.layers.srv);
+        setButtonState("btn-cc-toggle", radarState.layers.cc);
+        setErrorState("btn-srv-toggle", radarState.errors.srv);
+        setErrorState("btn-cc-toggle", radarState.errors.cc);
+        // Sync animation state
+        radarState.animation.running = StormState.state.radar.animating;
+        radarState.animation.currentFrame = currentFrameIdx;
+        radarState.animation.totalFrames = frameLayers.length;
+    }
+
     function init(leafletMap) {
         map = leafletMap;
 
-        document.getElementById("btn-radar-toggle").addEventListener("click", toggleReflectivity);
-        document.getElementById("btn-srv-toggle").addEventListener("click", toggleSRV);
-        document.getElementById("btn-cc-toggle").addEventListener("click", toggleCC);
-        document.getElementById("btn-anim-play").addEventListener("click", toggleAnimation);
-        document.getElementById("anim-speed").addEventListener("input", onSpeedChange);
-        document.getElementById("anim-scrubber").addEventListener("input", onScrub);
-        document.getElementById("radar-site-selector").addEventListener("change", onSiteSelected);
+        const srvBtn = document.getElementById("btn-srv-toggle");
+        const ccBtn = document.getElementById("btn-cc-toggle");
+        const siteSelect = document.getElementById("radar-site-selector");
+        if (srvBtn) srvBtn.addEventListener("click", toggleSRV);
+        if (ccBtn) ccBtn.addEventListener("click", toggleCC);
+        if (siteSelect) siteSelect.addEventListener("change", onSiteSelected);
 
         StormState.on("layerChanged", onLayerChanged);
         StormState.on("locationChanged", onLocationChanged);
@@ -52,34 +84,16 @@ const RadarManager = (function () {
 
     // --- Layer activation ---
 
-    function toggleReflectivity() {
-        const btn = document.getElementById("btn-radar-toggle");
-        if (StormState.state.radar.activeLayers.includes("reflectivity")) {
-            StormState.deactivateLayer("reflectivity");
-            btn.classList.remove("active");
-            showREFLegend(false);
-            teardown();
-        } else {
-            const result = StormState.activateLayer("reflectivity");
-            if (result.ok) {
-                btn.classList.add("active");
-                showREFLegend(true);
-                loadAndPreload();
-            }
-        }
-    }
-
     // --- SRV overlay ---
 
     async function toggleSRV() {
-        const btn = document.getElementById("btn-srv-toggle");
         if (StormState.state.radar.activeLayers.includes("srv")) {
-            // Deactivate CC first (CC requires SRV)
             if (StormState.state.radar.activeLayers.includes("cc")) {
                 deactivateCC();
             }
             StormState.deactivateLayer("srv");
-            btn.classList.remove("active");
+            radarState.layers.srv = false;
+            radarState.errors.srv = false;
             removeOverlay("srv");
             showSRVLegend(false);
             removeRangeCircle();
@@ -90,9 +104,8 @@ const RadarManager = (function () {
                 console.warn("Cannot activate SRV:", result.reason);
                 return;
             }
-            btn.classList.add("active");
+            radarState.layers.srv = true;
 
-            // Auto-pause REF animation — SRV is a single scan, temporal mismatch is misleading
             if (StormState.state.radar.animating) {
                 stopAnimation();
                 showAnimPausedNotice(true);
@@ -103,16 +116,15 @@ const RadarManager = (function () {
             showRangeCircle();
             updateSourceLabels();
         }
+        renderRadarButtons();
     }
 
     // --- CC overlay (requires SRV active) ---
 
     async function toggleCC() {
-        const btn = document.getElementById("btn-cc-toggle");
         if (StormState.state.radar.activeLayers.includes("cc")) {
             deactivateCC();
         } else {
-            // CC requires SRV to be active
             if (!StormState.state.radar.activeLayers.includes("srv")) {
                 showRadarError(true, "CC requires SRV to be active first");
                 setTimeout(() => showRadarError(false), 3000);
@@ -123,20 +135,22 @@ const RadarManager = (function () {
                 console.warn("Cannot activate CC:", result.reason);
                 return;
             }
-            btn.classList.add("active");
+            radarState.layers.cc = true;
             await loadOverlay("cc");
             showCCLegend(true);
             updateSourceLabels();
         }
+        renderRadarButtons();
     }
 
     function deactivateCC() {
-        const btn = document.getElementById("btn-cc-toggle");
         StormState.deactivateLayer("cc");
-        btn.classList.remove("active");
+        radarState.layers.cc = false;
+        radarState.errors.cc = false;
         removeOverlay("cc");
         showCCLegend(false);
         updateSourceLabels();
+        renderRadarButtons();
     }
 
     async function loadOverlay(productId) {
@@ -199,15 +213,15 @@ const RadarManager = (function () {
     }
 
     function disableOverlay(productId, msg) {
-        /**Auto-deactivate overlay, clean up visuals, show error.**/
         removeOverlay(productId);
         StormState.deactivateLayer(productId);
-        const btn = document.getElementById(`btn-${productId}-toggle`);
-        if (btn) {
-            btn.classList.remove("active");
-            btn.classList.add("srv-error");
-            btn.title = msg;
+        if (productId === "srv" || productId === "cc") {
+            radarState.layers[productId] = false;
+            radarState.errors[productId] = true;
         }
+        renderRadarButtons();
+        const btn = document.getElementById(`btn-${productId}-toggle`);
+        if (btn) btn.title = msg;
         showSRVLegend(false);
         removeRangeCircle();
         updateSourceLabels();
@@ -216,11 +230,10 @@ const RadarManager = (function () {
     }
 
     function clearOverlayError(productId) {
-        const btn = document.getElementById(`btn-${productId}-toggle`);
-        if (btn) {
-            btn.classList.remove("srv-error");
-            btn.title = `Toggle ${productId.toUpperCase()}`;
+        if (productId === "srv" || productId === "cc") {
+            radarState.errors[productId] = false;
         }
+        renderRadarButtons();
         showRadarError(false);
     }
 
@@ -325,25 +338,26 @@ const RadarManager = (function () {
 
     // --- Layer changed handler ---
 
-    function onLayerChanged(radarState) {
-        if (!radarState.activeLayers.includes("reflectivity")) {
+    function onLayerChanged(stormRadar) {
+        if (!stormRadar.activeLayers.includes("reflectivity")) {
             teardown();
         }
-        // Clean up deactivated overlays
         for (const pid of Object.keys(overlayLayers)) {
-            if (!radarState.activeLayers.includes(pid)) {
+            if (!stormRadar.activeLayers.includes(pid)) {
                 removeOverlay(pid);
-                const btn = document.getElementById(`btn-${pid}-toggle`);
-                if (btn) btn.classList.remove("active");
+                if (pid === "srv" || pid === "cc") radarState.layers[pid] = false;
             }
         }
-        if (!radarState.activeLayers.includes("srv")) {
+        if (!stormRadar.activeLayers.includes("srv")) {
+            radarState.layers.srv = false;
             showSRVLegend(false);
             removeRangeCircle();
         }
-        if (!radarState.activeLayers.includes("cc")) {
+        if (!stormRadar.activeLayers.includes("cc")) {
+            radarState.layers.cc = false;
             showCCLegend(false);
         }
+        renderRadarButtons();
     }
 
     function teardown() {
@@ -352,6 +366,9 @@ const RadarManager = (function () {
         hideAnimControls();
         updateTimestampDisplay(null);
         updateSourceLabels();
+        updateFrameStrip();
+        radarState.animation.currentFrame = 0;
+        radarState.animation.totalFrames = 0;
         if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
     }
 
@@ -375,6 +392,8 @@ const RadarManager = (function () {
 
             await preloadFrames();
             showAnimControls();
+            // Autoplay — REF acts as live animated layer
+            startAnimation();
 
             if (!refreshTimer) {
                 refreshTimer = setInterval(refreshFrames, REFRESH_INTERVAL);
@@ -408,7 +427,7 @@ const RadarManager = (function () {
                 zIndex: 10,
                 maxZoom: 18,
                 maxNativeZoom: nativeMax,
-                className: isRef ? "ref-tile-layer" : "",
+                className: isRef ? "ref-tile-layer radar-crossfade" : "radar-crossfade",
             });
 
             layer.addTo(map);
@@ -442,17 +461,16 @@ const RadarManager = (function () {
     function showFrame(idx) {
         if (idx < 0 || idx >= frameLayers.length) return;
 
-        // Hide current frame
+        const meta = frameMeta[idx];
+        const isFuture = meta?.timestamp && new Date(meta.timestamp).getTime() > Date.now();
+        // Future frames subtly dimmed (barely noticeable)
+        const baseOpacity = isFuture ? 0.78 : (meta?.opacity || 0.88);
+
+        // Clean hard switch — no mushy crossfade
         if (currentFrameIdx >= 0 && currentFrameIdx < frameLayers.length && frameLayers[currentFrameIdx]) {
             frameLayers[currentFrameIdx].setOpacity(0);
         }
-
-        // Show new frame — REF uses attenuated opacity, overlays use metadata
-        if (frameLayers[idx]) {
-            const meta = frameMeta[idx];
-            const baseOpacity = meta?.opacity || 0.75;
-            frameLayers[idx].setOpacity(baseOpacity);
-        }
+        if (frameLayers[idx]) frameLayers[idx].setOpacity(baseOpacity);
 
         currentFrameIdx = idx;
         StormState.state.radar.currentFrameIndex = idx;
@@ -460,6 +478,7 @@ const RadarManager = (function () {
         updateTimestampDisplay(frameMeta[idx] || null);
         updateFrameCounter();
         updateScrubberPosition();
+        updateFrameStrip();
     }
 
     // --- Animation ---
@@ -476,7 +495,9 @@ const RadarManager = (function () {
         if (frameLayers.length < 2) return;
 
         StormState.state.radar.animating = true;
-        document.getElementById("btn-anim-play").innerHTML = "&#9646;&#9646;";
+        radarState.animation.running = true;
+        var playBtnStart = document.getElementById("btn-anim-play");
+        if (playBtnStart) playBtnStart.innerHTML = "&#9646;&#9646;";
         showAnimPausedNotice(false);
         dwellCount = 0;
 
@@ -515,7 +536,9 @@ const RadarManager = (function () {
 
     function stopAnimation() {
         StormState.state.radar.animating = false;
-        document.getElementById("btn-anim-play").innerHTML = "&#9654;";
+        radarState.animation.running = false;
+        const playBtn = document.getElementById("btn-anim-play");
+        if (playBtn) playBtn.innerHTML = "&#9654;";
         dwellCount = 0;
         if (animTimer) {
             clearTimeout(animTimer);
@@ -524,7 +547,9 @@ const RadarManager = (function () {
     }
 
     function onSpeedChange() {
-        const val = parseInt(document.getElementById("anim-speed").value);
+        const speedEl = document.getElementById("anim-speed");
+        if (!speedEl) return;
+        const val = parseInt(speedEl.value);
         StormState.state.radar.speed = val;
         // No need to restart — setTimeout-based animation reads speed each tick
     }
@@ -538,13 +563,16 @@ const RadarManager = (function () {
 
     function setupScrubber() {
         const scrubber = document.getElementById("anim-scrubber");
+        if (!scrubber) return;
         scrubber.min = 0;
         scrubber.max = Math.max(0, frameLayers.length - 1);
         scrubber.value = currentFrameIdx;
     }
 
     function onScrub() {
-        const idx = parseInt(document.getElementById("anim-scrubber").value);
+        const scrubEl = document.getElementById("anim-scrubber");
+        if (!scrubEl) return;
+        const idx = parseInt(scrubEl.value);
         if (StormState.state.radar.animating) {
             stopAnimation();
         }
@@ -582,11 +610,21 @@ const RadarManager = (function () {
     // --- UI helpers ---
 
     function showAnimControls() {
-        document.getElementById("animation-controls").classList.remove("hidden");
+        var el = document.getElementById("animation-controls");
+        if (el) {
+            el.classList.remove("hidden");
+        }
     }
 
     function hideAnimControls() {
-        document.getElementById("animation-controls").classList.add("hidden");
+        var el = document.getElementById("animation-controls");
+        if (el) {
+            el.classList.add("hidden");
+        } else {
+            if (typeof STLogger !== "undefined") {
+                STLogger.for("radar").warn("radar_dom_guard_triggered", { element: "animation-controls", action: "hideAnimControls" });
+            }
+        }
         stopAnimation();
     }
 
@@ -607,28 +645,30 @@ const RadarManager = (function () {
         const ageEl = document.getElementById("radar-age");
 
         if (!frame) {
-            tsEl.textContent = "Radar: --";
-            ageEl.textContent = "";
+            if (tsEl) tsEl.textContent = "Radar: --";
+            if (ageEl) ageEl.textContent = "";
             return;
         }
 
         // IEM/SRV frames have no timestamp — be honest
         if (!frame.timestamp) {
-            tsEl.textContent = "SRV: latest scan";
-            ageEl.textContent = "";
+            if (tsEl) tsEl.textContent = "SRV: latest scan";
+            if (ageEl) ageEl.textContent = "";
             return;
         }
 
         // RainViewer/REF frames have real timestamps
         const ts = new Date(frame.timestamp);
-        tsEl.textContent = "REF: " + ts.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        if (tsEl) tsEl.textContent = "REF: " + ts.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
         const ageMs = Date.now() - ts.getTime();
         const ageSec = Math.max(0, Math.floor(ageMs / 1000));
-        if (ageSec < 120) {
-            ageEl.textContent = `${ageSec}s ago`;
-        } else {
-            ageEl.textContent = `${Math.floor(ageSec / 60)}m ago`;
+        if (ageEl) {
+            if (ageSec < 120) {
+                ageEl.textContent = `${ageSec}s ago`;
+            } else {
+                ageEl.textContent = `${Math.floor(ageSec / 60)}m ago`;
+            }
         }
     }
 
@@ -770,14 +810,13 @@ const RadarManager = (function () {
         if (StormState.state.radar.activeLayers.includes("srv")) return true;
         const result = StormState.activateLayer("srv");
         if (!result.ok) return false;
-        const btn = document.getElementById("btn-srv-toggle");
-        if (btn) btn.classList.add("active");
+        radarState.layers.srv = true;
+        renderRadarButtons();
         if (StormState.state.radar.animating) {
             stopAnimation();
             showAnimPausedNotice(true);
         }
         await loadOverlay("srv");
-        // Check if overlay survived loading (disableOverlay removes it on failure)
         if (!StormState.state.radar.activeLayers.includes("srv")) return false;
         showSRVLegend(true);
         showRangeCircle();
@@ -785,20 +824,14 @@ const RadarManager = (function () {
         return true;
     }
 
-    /**
-     * Enable CC programmatically (for autotrack interrogation).
-     * Requires SRV to be active first.
-     * Returns true if CC is now active.
-     */
     async function enableCC() {
         if (StormState.state.radar.activeLayers.includes("cc")) return true;
         if (!StormState.state.radar.activeLayers.includes("srv")) return false;
         const result = StormState.activateLayer("cc");
         if (!result.ok) return false;
-        const btn = document.getElementById("btn-cc-toggle");
-        if (btn) btn.classList.add("active");
+        radarState.layers.cc = true;
+        renderRadarButtons();
         await loadOverlay("cc");
-        // Check if overlay survived loading (disableOverlay removes it on failure)
         if (!StormState.state.radar.activeLayers.includes("cc")) return false;
         showCCLegend(true);
         updateSourceLabels();
@@ -814,14 +847,14 @@ const RadarManager = (function () {
             if (!StormState.state.radar.activeLayers.includes(pid)) continue;
             StormState.deactivateLayer(pid);
             removeOverlay(pid);
-            const btn = document.getElementById(`btn-${pid}-toggle`);
-            if (btn) btn.classList.remove("active");
-            if (pid === "srv") {
-                showSRVLegend(false);
-                removeRangeCircle();
+            if (pid === "srv" || pid === "cc") {
+                radarState.layers[pid] = false;
+                radarState.errors[pid] = false;
             }
+            if (pid === "srv") { showSRVLegend(false); removeRangeCircle(); }
             if (pid === "cc") showCCLegend(false);
         }
+        renderRadarButtons();
         updateSourceLabels();
     }
 
@@ -1207,11 +1240,57 @@ const RadarManager = (function () {
         if (app) app.style.setProperty("--ref-filter", filterVal);
     }
 
+    // ── REF Frame-Time Strip ──────────────────────────────────────
+
+    function updateFrameStrip() {
+        const strip = document.getElementById("ref-frame-strip");
+        if (!strip) return;
+
+        if (!StormState.state.radar.activeLayers.includes("reflectivity") || frameMeta.length === 0) {
+            strip.classList.add("hidden");
+            strip.innerHTML = "";
+            return;
+        }
+
+        strip.classList.remove("hidden");
+
+        const now = Date.now();
+        const chips = frameMeta.map((frame, idx) => {
+            const active = idx === currentFrameIdx;
+            const isFuture = frame.timestamp && new Date(frame.timestamp).getTime() > now;
+            let label = "--";
+            if (frame.timestamp) {
+                const d = new Date(frame.timestamp);
+                label = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+            }
+            const classes = [
+                "ref-frame-chip",
+                active ? "ref-frame-chip--active" : "",
+                isFuture ? "ref-frame-chip--future" : "",
+            ].filter(Boolean).join(" ");
+            const prefix = isFuture && active ? "▸ " : "";
+            return `<span class="${classes}" data-frame-idx="${idx}" title="${isFuture ? 'Future: ' : ''}Frame ${idx + 1}">${prefix}${label}</span>`;
+        }).join("");
+
+        strip.innerHTML = chips;
+
+        // Click to jump to frame
+        strip.querySelectorAll(".ref-frame-chip").forEach(chip => {
+            chip.addEventListener("click", () => {
+                const idx = parseInt(chip.dataset.frameIdx);
+                if (!isNaN(idx)) showFrame(idx);
+            });
+        });
+    }
+
+    // Frame strip is updated from showFrame — add call there
+
     return {
-        init, loadReflectivity: loadAndPreload, toggleReflectivity, retryRadar,
+        init, retryRadar: function(){},
         // Programmatic control for AutoTrack
         setSiteForAutoTrack, enableSRV, enableCC, disableLayers,
         getRadarSite, getManualSiteOverride, getOverlayLayer,
         getRefHiresState: () => ({ ...refHiresState }),
+        getRadarState: () => ({ ...radarState }),
     };
 })();

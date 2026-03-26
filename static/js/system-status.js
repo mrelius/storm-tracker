@@ -44,6 +44,7 @@ const SystemStatus = (function () {
         _updateAudio();
         _updateAge();
         _updateFilters();
+        _updateFreshness();
     }
 
     // ── Alert Status ────────────────────────────────────────────
@@ -116,12 +117,17 @@ const SystemStatus = (function () {
         if (at.mode === "off") {
             el.textContent = "AT OFF";
             el.className = "ss-badge ss-dim";
+            el.title = "Auto Track: Off";
         } else {
             const target = at.targetEvent
                 ? _shortEvent(at.targetEvent)
                 : "---";
-            el.textContent = `AT ${target}`;
+            // Include radar site for interrogation mode
+            const site = (at.mode === "interrogate" && at.radarSite) ? ` ${at.radarSite}` : "";
+            const paused = at.followPaused ? " ⏸" : "";
+            el.textContent = `Tracking ${target}${site}${paused}`;
             el.className = "ss-badge ss-at-on";
+            el.title = `Auto Track: ${at.targetEvent || "active"}${site ? " · Interrogating " + at.radarSite : ""}${at.followPaused ? " · Follow paused" : ""}`;
         }
     }
 
@@ -134,11 +140,68 @@ const SystemStatus = (function () {
         return evt.slice(0, 3).toUpperCase();
     }
 
+    // ── Radar Layers ────────────────────────────────────────────
+
+    function _updateRadar() {
+        const el = document.getElementById("ss-radar");
+        if (!el) return;
+
+        const layers = StormState.state.radar.activeLayers;
+        if (layers.length === 0) {
+            el.textContent = "";
+            el.className = "ss-badge ss-dim";
+            el.style.display = "none";
+            return;
+        }
+
+        el.style.display = "";
+        const parts = [];
+        if (layers.includes("reflectivity")) {
+            const animating = StormState.state.radar.animating;
+            const pres = StormState.state.radarPresentation;
+            const futureTag = pres.futureEnabled ? " + Future" : "";
+            parts.push(animating ? `Radar${futureTag} ▶` : "Radar");
+        }
+        if (layers.includes("srv")) parts.push("SRV");
+        if (layers.includes("cc")) parts.push("CC");
+
+        el.textContent = parts.join("+");
+        el.className = "ss-badge ss-live";
+        el.title = `Active layers: ${parts.join(", ")}`;
+    }
+
     // ── Audio Follow ────────────────────────────────────────────
 
     function _updateAudio() {
         const el = document.getElementById("ss-audio");
         if (!el) return;
+
+        // Use demo audio controller if available and demo active
+        if (typeof AudioDemoController !== "undefined" && StormState.state.demoAudio.enabled) {
+            const stripText = AudioDemoController.getStatusStripText();
+            if (stripText) {
+                el.textContent = stripText;
+                // Determine CSS class from demo state
+                const da = StormState.state.demoAudio;
+                if (da.errorCode || da.playbackState === "error") {
+                    el.className = "ss-badge ss-af-unavail";
+                    el.title = "Audio Demo: " + (da.errorMessage || "error");
+                } else if (da.playbackState === "playing") {
+                    el.className = "ss-badge ss-af-live";
+                    el.title = "Audio Demo: " + (da.streamTitle || "playing");
+                } else if (da.playbackState === "loading") {
+                    el.className = "ss-badge ss-af-pending";
+                    el.title = "Audio Demo: loading";
+                } else if (da.playbackState === "unavailable") {
+                    el.className = "ss-badge ss-af-unavail";
+                    el.title = "Audio Demo: unavailable";
+                } else {
+                    el.className = "ss-badge ss-dim";
+                    el.title = "Audio Demo: " + da.playbackState;
+                }
+                return;
+            }
+        }
 
         const af = StormState.state.audioFollow;
         if (!af.enabled) {
@@ -208,6 +271,20 @@ const SystemStatus = (function () {
         }
 
         el.innerHTML = badges.join("");
+    }
+
+    // ── Freshness Status ───────────────────────────────────────
+
+    function _updateFreshness() {
+        // Freshness badge is updated by FreshnessPanel.init() polling
+        // This is a no-op stub — the badge is self-updating from freshness-panel.js
+        // But if FreshnessPanel hasn't loaded, show a default
+        const el = document.getElementById("ss-freshness");
+        if (!el) return;
+        if (typeof FreshnessPanel === "undefined") {
+            el.textContent = "---";
+            el.className = "ss-badge ss-dim";
+        }
     }
 
     // ── Guidance Explainer ──────────────────────────────────────
@@ -295,5 +372,5 @@ const SystemStatus = (function () {
         return d.innerHTML;
     }
 
-    return { init };
+    return { init, update };
 })();

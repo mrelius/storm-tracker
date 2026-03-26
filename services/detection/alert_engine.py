@@ -115,6 +115,10 @@ class StormAlert:
     impact_severity_label: str = "unknown"
     impact_severity_score: int = 0
 
+    # Freshness metadata
+    freshness_status: str = "fresh"    # fresh, warning, stale
+    data_age_sec: float = 0.0
+
 
 def _update_alert_fields(alert: StormAlert, event: DetectionEvent):
     """Update an existing alert's location/motion/confidence fields from a detection event."""

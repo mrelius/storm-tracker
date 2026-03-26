@@ -226,14 +226,98 @@ ssh root@10.206.8.119 "redis-cli FLUSHDB"
 ### Deploy Code Changes
 
 ```bash
-# LXC 119 — from /home/melius/119_storm-tracker/
-./deploy.sh
+# LXC 119 — AUTHORITATIVE DEPLOY (bump + deploy + verify)
+cd /home/melius/119_storm-tracker
+scripts/bump_build.sh        # increment build, update all version refs
+scripts/deploy_ui.sh         # sync, restart, verify over HTTP
 
 # LXC 121 — from /home/melius/121_cc-radar/
 rsync -avz -e "ssh -i ~/.ssh/id_proxmox" \
     /home/melius/121_cc-radar/ root@10.206.8.121:/opt/cc-radar/
 ssh root@10.206.8.121 "systemctl restart cc-pipeline cc-api"
 ```
+
+---
+
+## UI DEPLOYMENT RULES (MANDATORY)
+
+**These rules are non-negotiable. Violation = incomplete work.**
+
+### Authoritative Model
+
+| Path | Role |
+|---|---|
+| `/home/melius/119_storm-tracker` | Edit source (worktree) — NOT runtime |
+| `/opt/storm-tracker` (LXC 119) | Runtime source of truth — what the server serves |
+| `http://10.206.8.119:8119` | Verification endpoint — only HTTP response counts |
+
+### Rule: Editing worktree is NOT deployment
+
+Changing files under `/home/melius/119_storm-tracker` does NOT update the running server. The server on LXC 119 serves from `/opt/storm-tracker`. Files must be synced and the service restarted.
+
+### Rule: Success requires HTTP verification
+
+Any frontend/UI-affecting change is **incomplete** until ALL of the following are true:
+1. `scripts/deploy_ui.sh` passes (sync + restart + health)
+2. `scripts/verify_ui_deploy.sh` passes (HTTP response matches build)
+3. Served HTML confirms expected `build_version`, `build_marker`, `__ST_BUILD__`
+4. All `?v=` asset tags match the current build number
+5. No stale prior-version tags remain
+
+**Required failure wording if verification fails:**
+> "UI change not complete — deployment verification failed."
+
+### Rule: UI changes trigger mandatory deploy
+
+Any change touching these paths requires deployment:
+- `templates/`
+- `static/js/`
+- `static/css/`
+- `static/sw.js`
+- `.build-info.json`
+- Any file affecting rendered frontend behavior
+
+Detection: `scripts/is_ui_change.sh`
+
+### Deploy Commands
+
+```bash
+# Step 1: Bump build version (updates all references atomically)
+scripts/bump_build.sh
+
+# Step 2: Deploy + verify (single command, fails on mismatch)
+scripts/deploy_ui.sh
+
+# Step 3 (standalone verification):
+scripts/verify_ui_deploy.sh
+
+# Check if deploy is needed:
+scripts/is_ui_change.sh
+```
+
+### Build Identity
+
+Single source of truth: `.build-info.json`
+
+```json
+{
+  "build_number": 220,
+  "build_version": "v220",
+  "build_marker": "v220-2026-03-25T14-00-00Z",
+  "built_at": "2026-03-25T14:00:00Z"
+}
+```
+
+Visible in three places:
+1. Served HTML (`<span id="build-version">`, `__ST_BUILD_INFO__`, `BUILD_MARKER` comment)
+2. `GET /api/debug/build` endpoint
+3. `.last_deploy.json` on deploy target
+
+### Deploy Stamp
+
+Written to `/opt/storm-tracker/.last_deploy.json` after each successful deploy. Contains build identity + timestamp. Queryable via `/api/debug/build`.
+
+---
 
 ### Switch Radar Site
 

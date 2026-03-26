@@ -83,3 +83,34 @@ def flush_pattern(pattern: str):
 
 def get_stats() -> dict:
     return dict(_stats)
+
+
+def get_memory_info() -> dict:
+    """Get Redis memory usage and eviction stats."""
+    if not _available or not _client:
+        return {"available": False}
+    try:
+        info = _client.info("memory")
+        stats = _client.info("stats")
+        used_mb = info.get("used_memory", 0) / (1024 * 1024)
+        max_mb = info.get("maxmemory", 0) / (1024 * 1024)
+        pct = (used_mb / max_mb * 100) if max_mb > 0 else 0
+        evictions = stats.get("evicted_keys", 0)
+
+        result = {
+            "available": True,
+            "used_mb": round(used_mb, 1),
+            "max_mb": round(max_mb, 1),
+            "used_pct": round(pct, 1),
+            "evicted_keys": evictions,
+            "peak_mb": round(info.get("used_memory_peak", 0) / (1024 * 1024), 1),
+        }
+
+        if evictions > 0:
+            logger.warning(f"redis_eviction_detected: {evictions} keys evicted")
+        if pct > 85:
+            logger.warning(f"redis_memory_high: {used_mb:.1f}MB / {max_mb:.1f}MB ({pct:.0f}%)")
+
+        return result
+    except Exception as e:
+        return {"available": True, "error": str(e)[:100]}

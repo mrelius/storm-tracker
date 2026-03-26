@@ -233,8 +233,7 @@ const StormAlertPanel = (function () {
                 const lat = parseFloat(card.dataset.lat);
                 const lon = parseFloat(card.dataset.lon);
                 if (!isNaN(lat) && !isNaN(lon)) {
-                    const map = StormMap.getMap();
-                    if (map) map.setView([lat, lon], 8);
+                    if (typeof Camera !== "undefined") { Camera.move({ source: "user", center: [lat, lon], zoom: 8, animate: false, reason: "alert_card_click" }); } else { const map = StormMap.getMap(); if (map) { map.setView([lat, lon], 8); } }
                 }
             });
         });

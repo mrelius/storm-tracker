@@ -287,6 +287,18 @@ const OptionalEnhancements = (function () {
             parts.push("\ntfe:", tfe.focusMode, " pri:", tfe.primaryEventId ? tfe.primaryEventId.slice(-8) : "—", " cards:", tfe.visibleCardEventIds.length);
         }
 
+        if (typeof CameraPolicy !== "undefined") {
+            const cp = CameraPolicy.getState();
+            parts.push("\npolicy:", cp.preference, " owner:", cp.ownerMode, " sub:", cp.automaticSubmode || "—", " wx:", cp.importantWeatherPresent ? "YES" : "no");
+        }
+
+        if (typeof IdleAwareness !== "undefined") {
+            const idle = IdleAwareness.getState();
+            if (idle.mode === "active") {
+                parts.push("\nidle:", idle.submode || "—", " tgt:", idle.idleTargetId ? idle.idleTargetId.slice(-8) : "—");
+            }
+        }
+
         if (typeof RadarManager !== "undefined" && RadarManager.getRefHiresState) {
             const rh = RadarManager.getRefHiresState();
             if (rh.active) {

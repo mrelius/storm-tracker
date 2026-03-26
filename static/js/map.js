@@ -11,7 +11,7 @@ const StormMap = (function () {
         map = L.map("map", {
             center: [39.5, -84.5],
             zoom: 6,
-            zoomControl: true,
+            zoomControl: false,
             attributionControl: true,
         });
 
@@ -24,7 +24,7 @@ const StormMap = (function () {
 
         // Listen for location changes
         StormState.on("locationChanged", (loc) => {
-            map.setView([loc.lat, loc.lon], map.getZoom());
+            if (typeof Camera !== "undefined") { Camera.move({ source: "idle", center: [loc.lat, loc.lon], animate: false, reason: "location_changed" }); } else { map.setView([loc.lat, loc.lon], map.getZoom()); }
             document.getElementById("location-display").textContent =
                 loc.name || `${loc.lat.toFixed(2)}, ${loc.lon.toFixed(2)}`;
         });

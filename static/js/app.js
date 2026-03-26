@@ -48,7 +48,13 @@
         initViewportMode();
         STLogger.init();
         const log = STLogger.for("app");
+        console.log("APP VERSION: v" + (window.__ST_BUILD__ || "?"));
         log.info("app_init", { build: window.__ST_BUILD__ || "?", viewportMode });
+
+        // Fail-fast: verify audio demo scenarios loaded
+        if (typeof AudioDemoScenarios === "undefined") {
+            console.error("[FAIL-FAST] AudioDemoScenarios not loaded — check script includes");
+        }
 
         // 0. Restore persisted session state (before any init)
         const savedSession = SessionPersist.restore();
@@ -69,23 +75,44 @@
         AudioAnnounce.init();
         // AlertFloat removed — replaced by pulse card
         ATPlaces.init();
+        if (typeof CameraPolicy !== "undefined") CameraPolicy.init();
         if (typeof ThreatFocusEngine !== "undefined") ThreatFocusEngine.init();
         ContextPulse.init();
         PulseCards.init();
         ATSwitchSound.init();
         ClarityLayer.init();
         SystemStatus.init();
+        if (typeof FreshnessPanel !== "undefined") FreshnessPanel.init();
         GuidanceCard.init();
+        if (typeof PolygonVisuals !== "undefined") PolygonVisuals.init();
         SPCOverlay.init();
+        if (typeof SPCMultiDay !== "undefined") SPCMultiDay.init();
         PredictionCard.init();
         PredictionOverlay.init();
         Settings.init();
         LogViewer.init();
         MobileGestures.init();
         if (typeof MobileEnhancements !== "undefined") MobileEnhancements.init();
+        if (typeof IdleAwareness !== "undefined") IdleAwareness.init();
         if (typeof OptionalEnhancements !== "undefined") OptionalEnhancements.init();
+        if (typeof StormVizState !== "undefined") StormVizState.init();
+        if (typeof AudioUnlock !== "undefined") AudioUnlock.init();
+        if (typeof AlertState !== "undefined") AlertState.init();
+        if (typeof AlertEngine !== "undefined") AlertEngine.init();
+        if (typeof StormViz !== "undefined") { StormViz.init(); StormViz.start(map); }
+        if (typeof PolygonEngine !== "undefined") PolygonEngine.init();
+        if (typeof CameraController !== "undefined") CameraController.init();
+        if (typeof StormCamera !== "undefined") StormCamera.init();
+        if (typeof MotionEngine !== "undefined") { MotionEngine.init(); MotionEngine.start(map); }
+        if (typeof ImpactZone !== "undefined") { ImpactZone.init(); ImpactZone.start(map); }
+        if (typeof ContextZoomResolver !== "undefined") ContextZoomResolver.init();
+        if (typeof AIPanel !== "undefined") AIPanel.init();
+        if (typeof AudioDemoController !== "undefined") AudioDemoController.init();
+        if (typeof DemoMode !== "undefined") DemoMode.initUI();
         if (typeof ContextZoom !== "undefined") ContextZoom.init();
         AutoTrackDebug.init();
+        if (typeof StormStateClient !== "undefined") StormStateClient.init();
+        if (typeof StateDebugOverlay !== "undefined") StateDebugOverlay.init();
         SessionPersist.init();
         Validation.init(map);
         Feedback.init();
@@ -93,39 +120,66 @@
         // 2b. Apply restored session state (after subsystems ready)
         SessionPersist.applyRestore(savedSession);
 
-        // Header minimize/restore
-        // SRV popup — move selector into popup, open on SRV click
+        // SRV popup — click-only open, 3s auto-close, no X button
         (function () {
             const srvBtn = document.getElementById("btn-srv-toggle");
             const popup = document.getElementById("srv-popup");
             const popupBody = document.getElementById("srv-popup-body");
             const closeBtn = document.getElementById("srv-popup-close");
             const selector = document.getElementById("radar-site-selector");
+            let srvFlyoutTimer = null;
+            const SRV_FLYOUT_TIMEOUT_MS = 3000;
 
             if (srvBtn && popup && popupBody && selector) {
-                // Move the selector into the popup body
                 popupBody.appendChild(selector);
                 selector.classList.remove("srv-popup-hidden");
 
-                // SRV button: toggle SRV layer + open popup
-                srvBtn.addEventListener("click", (e) => {
-                    // Only show popup if SRV is being enabled (not disabled)
+                // Hide X close button
+                if (closeBtn) closeBtn.style.display = "none";
+
+                function openSRVFlyout() {
+                    popup.classList.remove("hidden");
+                    if (srvFlyoutTimer) clearTimeout(srvFlyoutTimer);
+                    srvFlyoutTimer = setTimeout(() => closeSRVFlyout("timeout"), SRV_FLYOUT_TIMEOUT_MS);
+                }
+
+                function closeSRVFlyout(reason) {
+                    popup.classList.add("hidden");
+                    if (srvFlyoutTimer) { clearTimeout(srvFlyoutTimer); srvFlyoutTimer = null; }
+                }
+
+                // Open only on SRV button click, only when enabling
+                srvBtn.addEventListener("click", () => {
                     setTimeout(() => {
                         if (StormState.state.radar.activeLayers.includes("srv")) {
-                            popup.classList.remove("hidden");
+                            openSRVFlyout();
                         } else {
-                            popup.classList.add("hidden");
+                            closeSRVFlyout("button_toggle");
                         }
                     }, 100);
                 });
 
-                closeBtn.addEventListener("click", () => popup.classList.add("hidden"));
+                // Selection closes immediately
+                selector.addEventListener("change", () => closeSRVFlyout("selection"));
 
-                // Close on click outside
+                // Click outside closes
                 document.addEventListener("click", (e) => {
                     if (!popup.contains(e.target) && e.target !== srvBtn && !srvBtn.contains(e.target)) {
-                        popup.classList.add("hidden");
+                        closeSRVFlyout("outside_click");
                     }
+                });
+
+                // Escape closes
+                document.addEventListener("keydown", (e) => {
+                    if (e.key === "Escape" && !popup.classList.contains("hidden")) {
+                        closeSRVFlyout("escape");
+                    }
+                });
+
+                // Reset timer on interaction inside popup
+                popup.addEventListener("mouseenter", () => {
+                    if (srvFlyoutTimer) clearTimeout(srvFlyoutTimer);
+                    srvFlyoutTimer = setTimeout(() => closeSRVFlyout("timeout"), SRV_FLYOUT_TIMEOUT_MS);
                 });
             }
         })();
@@ -198,8 +252,7 @@
                     _updateGPSBtn();
                     // Recenter immediately
                     if (gps.lat != null) {
-                        const map = StormMap.getMap();
-                        if (map) map.setView([gps.lat, gps.lon], map.getZoom(), { animate: true });
+                        Camera.move({ source: "gps", center: [gps.lat, gps.lon], reason: "gps_recenter" });
                     }
                 } else {
                     // If active and not paused, deactivate
@@ -329,10 +382,6 @@
         }
 
         async function _enableGPSLayers(lat, lon) {
-            if (!StormState.state.radar.activeLayers.includes("reflectivity")) {
-                const refBtn = document.getElementById("btn-radar-toggle");
-                if (refBtn && !refBtn.classList.contains("active")) refBtn.click();
-            }
             try {
                 const resp = await fetch(`/api/radar/nexrad/nearest?lat=${lat}&lon=${lon}&count=1`);
                 if (resp.ok) {
@@ -363,8 +412,7 @@
                     _updateGPSBtn();
                     // Recenter
                     if (gps.lat != null) {
-                        const map = StormMap.getMap();
-                        if (map) map.setView([gps.lat, gps.lon], map.getZoom(), { animate: true });
+                        Camera.move({ source: "gps", center: [gps.lat, gps.lon], reason: "gps_auto_resume" });
                     }
                 }
             }, GPS_AUTO_RESUME_MS);
@@ -460,6 +508,87 @@
         // 6. Offline detection
         window.addEventListener("online", () => setOffline(false));
         window.addEventListener("offline", () => setOffline(true));
+
+        // ── Mode-Aware Header ──────────────────────────────────
+        const IDLE_TOOLS = new Set(["btn-camera-mode"]);
+        const STORM_TOOLS = new Set([
+            "btn-srv-toggle", "btn-cc-toggle",
+            "btn-spc-toggle", "btn-autotrack", "btn-camera-mode",
+            "btn-audio-follow-toggle", "btn-switch-sound-toggle",
+            "btn-context-pulse-toggle", "btn-ai-toggle",
+        ]);
+        const SETTINGS_ONLY_TOOLS = new Set(["btn-noaa-test", "btn-tone-test"]);
+
+        function applyHeaderMode(submode) {
+            const at = StormState.state.autotrack;
+            const isTracking = at.enabled && at.targetAlertId;
+            const isIdle = submode === "IDLE_AWARENESS" && !isTracking;
+            const titleEl = document.getElementById("app-title");
+            if (titleEl) {
+                titleEl.textContent = isIdle ? "LOCAL NEWS" : "STORM TRACKER";
+                titleEl.classList.toggle("header-mode--local", isIdle);
+                titleEl.classList.toggle("header-mode--tracking", !isIdle);
+            }
+
+            // Tool visibility
+            const controls = document.getElementById("radar-controls");
+            if (controls) {
+                const buttons = controls.querySelectorAll(".radar-btn, select");
+                const visible = isIdle ? IDLE_TOOLS : STORM_TOOLS;
+                buttons.forEach(btn => {
+                    if (SETTINGS_ONLY_TOOLS.has(btn.id)) {
+                        btn.style.display = "none";
+                    } else if (btn.id && visible.size > 0) {
+                        btn.style.display = visible.has(btn.id) ? "" : (isIdle ? "none" : "");
+                    }
+                });
+                // In idle, also hide animation controls, site selector, loading
+                const animCtrl = document.getElementById("animation-controls");
+                const siteSelector = document.getElementById("radar-site-selector");
+                const radarLoading = document.getElementById("radar-loading");
+                if (animCtrl) animCtrl.style.display = isIdle ? "none" : "";
+                if (siteSelector) siteSelector.style.display = isIdle ? "none" : "";
+                if (radarLoading) radarLoading.style.display = isIdle ? "none" : "";
+            }
+        }
+
+        // Always hide TST and SPEAKER from main toolbar
+        SETTINGS_ONLY_TOOLS.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = "none";
+        });
+
+        // Listen for camera mode changes
+        StormState.on("cameraModeChanged", (data) => {
+            applyHeaderMode(data.submode);
+        });
+
+        // Also update header when AT changes (manual toggle, target switch)
+        StormState.on("autotrackChanged", () => {
+            const ps = typeof CameraPolicy !== "undefined" ? CameraPolicy.getState() : {};
+            applyHeaderMode(ps.automaticSubmode || "ACTIVE");
+        });
+        StormState.on("autotrackTargetChanged", () => {
+            const ps = typeof CameraPolicy !== "undefined" ? CameraPolicy.getState() : {};
+            applyHeaderMode(ps.automaticSubmode || "ACTIVE");
+        });
+
+        // Initial state from camera policy
+        if (typeof CameraPolicy !== "undefined") {
+            const ps = CameraPolicy.getState();
+            applyHeaderMode(ps.automaticSubmode || "IDLE_AWARENESS");
+        }
+
+        // Render saved location markers (persistent across modes)
+        if (typeof IdleAwareness !== "undefined" && IdleAwareness.renderSavedLocations) {
+            IdleAwareness.renderSavedLocations();
+        }
+        // Re-render on mode changes to ensure they persist
+        StormState.on("cameraModeChanged", () => {
+            if (typeof IdleAwareness !== "undefined" && IdleAwareness.renderSavedLocations) {
+                setTimeout(() => IdleAwareness.renderSavedLocations(), 500);
+            }
+        });
 
         console.log("[StormTracker] Ready");
     });

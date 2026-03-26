@@ -26,6 +26,7 @@ import httpx
 from config import get_settings
 from db import get_connection
 from services.detection.models import StormObject, Trend, DetectionResult
+from services.freshness import check as freshness_check, validate_timestamp
 from services.detection.geometry import (
     extract_centroid, haversine_mi, compute_bearing, bearing_to_direction,
 )
@@ -297,7 +298,11 @@ async def run_detection_cycle(
 # --- Shared helpers ---
 
 async def fetch_severe_alerts() -> list[dict]:
-    """Fetch active severe alerts from SQLite."""
+    """Fetch active severe alerts from SQLite with freshness enforcement.
+
+    HARD FAIL: alerts with stale 'issued' timestamps are filtered out
+    before entering the detection pipeline.
+    """
     now = datetime.now(timezone.utc).isoformat()
     db = await get_connection()
     try:
@@ -312,7 +317,24 @@ async def fetch_severe_alerts() -> list[dict]:
             (now,),
         )
         results = await rows.fetchall()
-        return [dict(r) for r in results]
+        alerts = [dict(r) for r in results]
+
+        # Freshness filter: drop expired alerts before detection
+        fresh_alerts = []
+        stale_count = 0
+        for alert in alerts:
+            expires_epoch = validate_timestamp(alert.get("expires", ""))
+            if expires_epoch:
+                fr = freshness_check("nws_alerts", expires_epoch,
+                                     entity_id=alert.get("id", ""))
+                if not fr["is_fresh"] and fr["action"] == "drop":
+                    stale_count += 1
+                    continue
+            fresh_alerts.append(alert)
+
+        if stale_count:
+            logger.info(f"Detection adapter: dropped {stale_count} stale alerts")
+        return fresh_alerts
     except Exception as e:
         logger.error(f"Failed to fetch severe alerts: {e}")
         return []

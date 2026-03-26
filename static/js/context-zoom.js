@@ -1,10 +1,14 @@
 /**
- * Storm Tracker — Contextual Auto Zoom-Out (v2 — spatial intelligence)
+ * Storm Tracker — Contextual Auto Zoom-Out (v3 — SPC escalation + visual differentiation)
+ *
+ * Two zoom modes:
+ *   normal_context — local cluster framing (existing behavior)
+ *   spc_context    — wider framing to include SPC outlook when severity crosses threshold
  *
  * Cluster-aware selection: prefer alerts that expand spatial coverage.
- * Bounding sanity: reject if expanded area > 3x tracked polygon area.
+ * Bounding sanity: reject if expanded area > limits.
  * Directional spread: require alerts in different directions from tracked.
- * Anti-flap: debounce enter/exit, cooldown, manual suppression.
+ * Anti-flap: debounce enter/exit, cooldown, manual suppression, mode hold.
  *
  * Only applies in AUTO_TRACK mode.
  */
@@ -16,8 +20,15 @@ const ContextZoom = (function () {
     const MIN_ALERT_COUNT = 2;
     const ZOOM_OUT_MIN = 1;
     const ZOOM_OUT_MAX = 2;
-    const BOUNDS_EXPANSION_LIMIT = 3.0; // max 3x tracked polygon area
+    const BOUNDS_EXPANSION_LIMIT = 3.0; // max 3x tracked polygon area (normal_context)
     const MIN_ANGULAR_SPREAD = 30;      // degrees — min spread between candidates
+
+    // ── SPC Context Thresholds ──────────────────────────────────
+    const CONTEXT_ZOOM_MIN = 6;
+    const CONTEXT_ZOOM_MAX = 10;
+    const SPC_CONTEXT_ZOOM_MIN = 5;
+    const SPC_CONTEXT_MAX_AREA_MULTIPLIER = 12;
+    const SPC_ESCALATION_MIN_TIER = "significant";
 
     // ── Timing ───────────────────────────────────────────────────
     const ENTER_DEBOUNCE_MS = 4000;
@@ -25,7 +36,9 @@ const ContextZoom = (function () {
     const COOLDOWN_MS = 12000;
     const MANUAL_SUPPRESS_MS = 25000;
     const EVAL_INTERVAL_MS = 15000;
-    const EDGE_HYSTERESIS_MI = 3; // prevent flap at boundary (29mi↔31mi)
+    const EDGE_HYSTERESIS_MI = 3;
+    const CONTEXT_MODE_MIN_HOLD_MS = 12000;
+    const CONTEXT_MODE_REEVAL_DEBOUNCE_MS = 3000;
 
     // ── Important Event Filter ───────────────────────────────────
     const IMPORTANT_EVENTS = new Set([
@@ -43,6 +56,8 @@ const ContextZoom = (function () {
         causeAlertIds: [],
         baseZoom: null,
         targetZoom: null,
+        zoomMode: null,             // "normal_context" | "spc_context" | null
+        lastModeChangeAt: null,
     };
 
     let enterTimer = null;
@@ -121,13 +136,243 @@ const ContextZoom = (function () {
 
         // Anti-flap: check if candidate set changed
         const hash = [tracked.id, ...selected.map(a => a.id)].sort().join(",");
-        if (hash === lastCandidateHash && state.active) return; // same set, no change
+        if (hash === lastCandidateHash && state.active) {
+            // Same cluster — check if zoom mode should change
+            _evaluateZoomMode(tracked, selected);
+            return;
+        }
         lastCandidateHash = hash;
 
         if (!state.active) {
             _scheduleEnter(tracked, selected);
         } else {
             state.causeAlertIds = [tracked.id, ...selected.map(a => a.id)];
+            // Update polygon visuals for changed cluster
+            _updatePolygonVisuals(tracked, selected);
+            _evaluateZoomMode(tracked, selected);
+        }
+    }
+
+    // ── Zoom Mode Determination ──────────────────────────────────
+
+    function _evaluateZoomMode(tracked, nearbySelected) {
+        const allAlerts = [tracked, ...nearbySelected];
+        const clusterSeverity = typeof SeverityModel !== "undefined"
+            ? SeverityModel.deriveClusterSeverity(allAlerts)
+            : "low";
+
+        // Check SPC escalation
+        const spcCandidate = typeof SPCMultiDay !== "undefined"
+            ? SPCMultiDay.selectMostSevereSpcDay({
+                trackedAlert: tracked,
+                nearbyAlerts: nearbySelected,
+                viewportBounds: _getViewportBounds(),
+                spcFeaturesByDay: _getSpcFeaturesByDay(),
+            })
+            : null;
+
+        const newMode = determineContextZoomMode({
+            trackedAlert: tracked,
+            nearbyAlerts: nearbySelected,
+            clusterSeverity,
+            spcCandidate,
+        });
+
+        // Anti-flap: don't switch modes too quickly
+        const now = Date.now();
+        if (newMode !== state.zoomMode) {
+            if (state.lastModeChangeAt && now - state.lastModeChangeAt < CONTEXT_MODE_MIN_HOLD_MS) {
+                return; // Hold current mode
+            }
+
+            const prevMode = state.zoomMode;
+            state.zoomMode = newMode;
+            state.lastModeChangeAt = now;
+
+            // Update shared state
+            const czr = StormState.state.contextZoomRuntime;
+            czr.zoomMode = newMode;
+            czr.reason = newMode === "spc_context" ? "severity_spc" : "multi_alert";
+
+            if (log) {
+                log.info("context_zoom_mode_changed", {
+                    previous_mode: prevMode,
+                    next_mode: newMode,
+                    reason: newMode === "spc_context" ? "severity_escalation" : "normal_cluster",
+                    cluster_severity: clusterSeverity,
+                    tracked_event_id: (tracked.id || "").slice(-12),
+                });
+            }
+
+            // If escalated to SPC, apply wider framing
+            if (newMode === "spc_context" && spcCandidate) {
+                _applySpcContextZoom(tracked, spcCandidate);
+            }
+        }
+    }
+
+    /**
+     * Determine context zoom mode based on severity and SPC availability.
+     */
+    function determineContextZoomMode({ trackedAlert, nearbyAlerts, clusterSeverity, spcCandidate }) {
+        if (!trackedAlert) return "normal_context";
+
+        const prefs = StormState.state.userPrefs;
+        if (!prefs.spcEscalationEnabled) return "normal_context";
+
+        if (shouldEscalateContextToSpc({ trackedAlert, clusterSeverity, spcCandidate })) {
+            return "spc_context";
+        }
+
+        return "normal_context";
+    }
+
+    /**
+     * Authoritative SPC escalation decision.
+     */
+    function shouldEscalateContextToSpc({ trackedAlert, clusterSeverity, spcCandidate }) {
+        if (!trackedAlert) return false;
+        if (!spcCandidate) return false;
+        if (typeof SeverityModel === "undefined") return false;
+        if (!SeverityModel.tierGte(clusterSeverity, SPC_ESCALATION_MIN_TIER)) return false;
+        if (!spcCandidate.intersectsTrackedArea && !spcCandidate.intersectsViewport) return false;
+        return true;
+    }
+
+    // ── SPC Context Zoom ─────────────────────────────────────────
+
+    function _applySpcContextZoom(tracked, spcCandidate) {
+        const map = typeof StormMap !== "undefined" ? StormMap.getMap() : null;
+        if (!map) return;
+
+        const trackedBounds = _getAlertBounds(tracked);
+        if (!trackedBounds) return;
+
+        // Use ContextZoomResolver if available for full SPC + reference framing
+        if (typeof ContextZoomResolver !== "undefined") {
+            const spcFeatures = _collectSpcFeatures(spcCandidate);
+            const safeArea = _computeSafeAreaInsets();
+
+            const resolved = ContextZoomResolver.resolveContextZoomBounds({
+                highlightedPolygonBounds: trackedBounds,
+                highlightedPolygonId: tracked.id,
+                spcReports: spcFeatures,
+                spcOutlookBounds: spcCandidate.bounds || null,
+                viewport: { width: window.innerWidth, height: window.innerHeight },
+                safeAreaInsets: safeArea,
+                map: map,
+            });
+
+            if (resolved) {
+                state.targetZoom = resolved.zoom;
+                Camera.move({
+                    source: "autotrack",
+                    center: [resolved.center.lat, resolved.center.lon],
+                    zoom: resolved.zoom,
+                    flyOptions: { duration: 1.2, easeLinearity: 0.2 },
+                    reason: "context_zoom_spc",
+                });
+
+                if (typeof SPCMultiDay !== "undefined") {
+                    SPCMultiDay.applyAutoSelectedSpcDay(spcCandidate.day);
+                }
+                return;
+            }
+        }
+
+        // Fallback: original bounds computation
+        const spcBounds = spcCandidate.bounds;
+        const result = computeSpcContextBounds({
+            trackedBounds,
+            spcBounds,
+            maxAreaMultiplier: SPC_CONTEXT_MAX_AREA_MULTIPLIER,
+        });
+
+        if (!result) return;
+
+        const targetZoom = Math.max(SPC_CONTEXT_ZOOM_MIN, Math.min(CONTEXT_ZOOM_MAX,
+            map.getBoundsZoom(result.pad(0.1))
+        ));
+
+        state.targetZoom = targetZoom;
+
+        const center = result.getCenter();
+        Camera.move({
+            source: "autotrack",
+            center: [center.lat, center.lng],
+            zoom: targetZoom,
+            flyOptions: { duration: 1.2, easeLinearity: 0.2 },
+            reason: "context_zoom_spc",
+        });
+
+        // Auto-enable SPC day overlay
+        if (typeof SPCMultiDay !== "undefined") {
+            SPCMultiDay.applyAutoSelectedSpcDay(spcCandidate.day);
+        }
+    }
+
+    function _collectSpcFeatures(spcCandidate) {
+        // Gather SPC features from SPCMultiDay if available
+        if (typeof SPCMultiDay === "undefined") return [];
+        try {
+            const reg = SPCMultiDay.getRegistry();
+            const dayKey = `day${spcCandidate.day}_convective`;
+            const entry = reg[dayKey];
+            if (entry && entry.features) return entry.features;
+        } catch (e) { /* ok */ }
+        return [];
+    }
+
+    function _computeSafeAreaInsets() {
+        // Pass null to let ContextZoomResolver measure dynamically from DOM
+        return null;
+    }
+
+    /**
+     * Compute SPC context bounds — union of tracked + SPC, clamped by multiplier.
+     */
+    function computeSpcContextBounds({ trackedBounds, spcBounds, maxAreaMultiplier }) {
+        if (!trackedBounds) return null;
+        if (!spcBounds) return trackedBounds;
+
+        const union = L.latLngBounds(trackedBounds.getSouthWest(), trackedBounds.getNorthEast());
+        union.extend(spcBounds);
+
+        // Reject if too large
+        const trackedArea = _boundsArea(trackedBounds);
+        const unionArea = _boundsArea(union);
+        if (trackedArea > 0 && unionArea / trackedArea > maxAreaMultiplier) {
+            if (log) {
+                log.info("spc_context_bounds_rejected", {
+                    reason: "area_multiplier_exceeded",
+                    area_multiplier: Math.round(unionArea / trackedArea * 10) / 10,
+                });
+            }
+            return null;
+        }
+
+        return union;
+    }
+
+    // ── Polygon Visual Integration ───────────────────────────────
+
+    function _updatePolygonVisuals(tracked, nearbySelected) {
+        if (typeof PolygonVisuals === "undefined" || typeof SeverityModel === "undefined") return;
+
+        const allAlerts = [tracked, ...nearbySelected];
+        const clusterSeverity = SeverityModel.deriveClusterSeverity(allAlerts);
+        const prefs = StormState.state.userPrefs;
+
+        PolygonVisuals.updateContextPolygonVisuals({
+            clusterEvents: allAlerts,
+            primaryEventId: tracked.id,
+            clusterSeverity,
+            flashingEnabled: prefs.flashPolygons,
+        });
+
+        // Trigger re-render of alert polygons
+        if (typeof AlertRenderer !== "undefined") {
+            AlertRenderer.renderPolygons();
         }
     }
 
@@ -136,7 +381,6 @@ const ContextZoom = (function () {
     function _selectForCoverage(tracked, candidates) {
         if (candidates.length <= 2) return candidates;
 
-        // Compute bearing from tracked to each candidate
         const trackedCenter = _getAlertCenter(tracked);
         if (!trackedCenter) return candidates.slice(0, 2);
 
@@ -149,14 +393,12 @@ const ContextZoom = (function () {
 
         if (withBearing.length < 2) return candidates.slice(0, 2);
 
-        // Sort by severity * closeness
         withBearing.sort((a, b) => {
             const scoreA = _importanceScore(a.alert) / (a.distance + 1);
             const scoreB = _importanceScore(b.alert) / (b.distance + 1);
             return scoreB - scoreA;
         });
 
-        // Pick first, then find second with maximum angular spread
         const first = withBearing[0];
         let bestSecond = null;
         let bestSpread = 0;
@@ -169,9 +411,8 @@ const ContextZoom = (function () {
             }
         }
 
-        // Require minimum spread — avoid picking overlapping alerts
         if (!bestSecond || bestSpread < MIN_ANGULAR_SPREAD) {
-            return [first.alert]; // only 1 — won't pass MIN_ALERT_COUNT
+            return [first.alert];
         }
 
         return [first.alert, bestSecond.alert];
@@ -209,11 +450,9 @@ const ContextZoom = (function () {
 
         const currentZoom = map.getZoom();
 
-        // Build tracked bounds
         const trackedBounds = _getAlertBounds(tracked);
         if (!trackedBounds) return;
 
-        // Build combined bounds
         const allAlerts = [tracked, ...nearby];
         let combinedBounds = L.latLngBounds(trackedBounds.getSouthWest(), trackedBounds.getNorthEast());
         for (const a of nearby) {
@@ -223,7 +462,6 @@ const ContextZoom = (function () {
 
         if (!combinedBounds.isValid()) return;
 
-        // Bounding sanity: reject if area expansion too large
         const trackedArea = _boundsArea(trackedBounds);
         const combinedArea = _boundsArea(combinedBounds);
         if (trackedArea > 0 && combinedArea / trackedArea > BOUNDS_EXPANSION_LIMIT) {
@@ -235,7 +473,6 @@ const ContextZoom = (function () {
             return;
         }
 
-        // Compute target zoom
         const fitZoom = map.getBoundsZoom(combinedBounds.pad(0.15));
         const delta = Math.max(ZOOM_OUT_MIN, Math.min(ZOOM_OUT_MAX, currentZoom - fitZoom));
         const targetZoom = Math.max(7, currentZoom - delta);
@@ -248,6 +485,19 @@ const ContextZoom = (function () {
         state.baseZoom = currentZoom;
         state.targetZoom = targetZoom;
         state.causeAlertIds = [tracked.id, ...nearby.map(a => a.id)];
+        state.zoomMode = "normal_context";
+        state.lastModeChangeAt = Date.now();
+
+        // Update shared state
+        const czr = StormState.state.contextZoomRuntime;
+        czr.active = true;
+        czr.reason = "multi_alert";
+        czr.enteredAt = state.enteredAt;
+        czr.currentClusterId = state.causeAlertIds.sort().join(",").slice(0, 40);
+        czr.zoomMode = "normal_context";
+
+        // Apply polygon visuals
+        _updatePolygonVisuals(tracked, nearby);
 
         if (log) log.info("context_zoom_entered", {
             trackedAlertId: tracked.id.slice(-12),
@@ -256,6 +506,7 @@ const ContextZoom = (function () {
             targetZoom: targetZoom,
             distanceMiles: Math.round(tracked.distance_mi || 0),
             reason: "multiple_close_important_alerts",
+            zoomMode: "normal_context",
         });
 
         const center = combinedBounds.getCenter();
@@ -266,6 +517,9 @@ const ContextZoom = (function () {
             flyOptions: { duration: 1.0, easeLinearity: 0.25 },
             reason: "context_zoom_in",
         });
+
+        // Evaluate if SPC escalation should happen
+        _evaluateZoomMode(tracked, nearby);
     }
 
     function _scheduleExit(reason) {
@@ -282,6 +536,7 @@ const ContextZoom = (function () {
         if (log) log.info("context_zoom_exited", {
             reason: reason,
             duration_s: state.enteredAt ? Math.round((Date.now() - state.enteredAt) / 1000) : 0,
+            zoomMode: state.zoomMode,
         });
 
         state.active = false;
@@ -290,9 +545,30 @@ const ContextZoom = (function () {
         state.causeAlertIds = [];
         state.baseZoom = null;
         state.targetZoom = null;
+        state.zoomMode = null;
+        state.lastModeChangeAt = null;
         lastCandidateHash = "";
 
         state.suppressedUntil = Date.now() + COOLDOWN_MS;
+
+        // Clear shared state
+        const czr = StormState.state.contextZoomRuntime;
+        czr.active = false;
+        czr.reason = null;
+        czr.enteredAt = null;
+        czr.currentClusterId = null;
+        czr.zoomMode = null;
+
+        // Clear polygon visuals
+        if (typeof PolygonVisuals !== "undefined") {
+            PolygonVisuals.updateContextPolygonVisuals({
+                clusterEvents: [],
+                primaryEventId: null,
+                clusterSeverity: "low",
+                flashingEnabled: false,
+            });
+            if (typeof AlertRenderer !== "undefined") AlertRenderer.renderPolygons();
+        }
 
         if (enterTimer) { clearTimeout(enterTimer); enterTimer = null; }
         if (exitTimer) { clearTimeout(exitTimer); exitTimer = null; }
@@ -304,8 +580,25 @@ const ContextZoom = (function () {
             _exit("manual_override");
             state.suppressedUntil = Date.now() + MANUAL_SUPPRESS_MS;
         }
-        // Also cancel pending enters
         if (enterTimer) { clearTimeout(enterTimer); enterTimer = null; }
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────
+
+    function _getViewportBounds() {
+        const map = typeof StormMap !== "undefined" ? StormMap.getMap() : null;
+        return map ? map.getBounds() : null;
+    }
+
+    function _getSpcFeaturesByDay() {
+        if (typeof SPCMultiDay === "undefined") return { 1: [], 2: [], 3: [] };
+        const reg = SPCMultiDay.getRegistry();
+        return {
+            1: reg.day1_convective ? [] : [],  // Features are internal to SPCMultiDay
+            2: [],
+            3: [],
+        };
+        // Note: SPCMultiDay.selectMostSevereSpcDay handles its own feature access
     }
 
     // ── Geometry Helpers ─────────────────────────────────────────
@@ -353,5 +646,11 @@ const ContextZoom = (function () {
         return { ...state };
     }
 
-    return { init, getState };
+    return {
+        init,
+        getState,
+        determineContextZoomMode,
+        shouldEscalateContextToSpc,
+        computeSpcContextBounds,
+    };
 })();
